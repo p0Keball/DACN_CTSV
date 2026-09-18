@@ -1,0 +1,21 @@
+# Thư mục chứa các gói thư viện cài đặt (rất nặng, không bao giờ đưa lên Git)
+node_modules/
+
+# File biến môi trường chứa mật khẩu Database, API Key tuyệt đối không đưa lên Git
+.env
+
+# File log và file tạm của hệ thống
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Thư mục build hoặc biên dịch (nếu có)
+dist/
+build/
+
+# Hệ điều hành ẩn
+.DS_Store
+Thumbs.db
