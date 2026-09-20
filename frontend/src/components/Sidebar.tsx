@@ -11,22 +11,26 @@ import {
   SettingOutlined,
   ReadOutlined,
 } from '@ant-design/icons';
+import { useNavigate, useLocation } from 'react-router-dom';
 
 const { Sider } = Layout;
 
-// Danh sách các mục menu bên thanh Sidebar
+// Đổi key thành các đường dẫn tương ứng để làm Router
 const menuItems = [
-  { key: '1', icon: <DashboardOutlined />, label: 'Tổng quan' },
-  { key: '2', icon: <UnorderedListOutlined />, label: 'Công việc' },
-  { key: '3', icon: <ApartmentOutlined />, label: 'Quy trình' },
-  { key: '4', icon: <UserOutlined />, label: 'Sinh viên' },
-  { key: '5', icon: <FolderOutlined />, label: 'Hồ sơ' },
-  { key: '6', icon: <BarChartOutlined />, label: 'Báo cáo' },
-  { key: '7', icon: <BellOutlined />, label: 'Thông báo' },
-  { key: '8', icon: <SettingOutlined />, label: 'Cài đặt' },
+  { key: '/', icon: <DashboardOutlined />, label: 'Tổng quan' },
+  { key: '/cong-viec', icon: <UnorderedListOutlined />, label: 'Công việc' },
+  { key: '/quy-trinh', icon: <ApartmentOutlined />, label: 'Quy trình' },
+  { key: '/sinh-vien', icon: <UserOutlined />, label: 'Sinh viên' },
+  { key: '/ho-so', icon: <FolderOutlined />, label: 'Hồ sơ' },
+  { key: '/bao-cao', icon: <BarChartOutlined />, label: 'Báo cáo' },
+  { key: '/thong-bao', icon: <BellOutlined />, label: 'Thông báo' },
+  { key: '/cai-dat', icon: <SettingOutlined />, label: 'Cài đặt' },
 ];
 
 const Sidebar: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   return (
     <Sider
       theme="light"
@@ -44,7 +48,7 @@ const Sidebar: React.FC = () => {
       {/* Khu vực Logo và Tên ứng dụng */}
       <div style={{ padding: '20px 16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
         <div style={{
-          backgroundColor: '#1677ff',
+          backgroundColor: '#237804', // Đổi sang xanh lá E-Office
           borderRadius: '8px',
           padding: '8px',
           display: 'flex',
@@ -61,7 +65,8 @@ const Sidebar: React.FC = () => {
       {/* Thanh Menu điều hướng */}
       <Menu
         mode="inline"
-        defaultSelectedKeys={['1']}
+        selectedKeys={[location.pathname]} // Tự động highlight menu theo URL hiện tại
+        onClick={(e) => navigate(e.key)} // Chuyển trang khi người dùng bấm vào
         items={menuItems}
         style={{ borderRight: 0 }}
       />

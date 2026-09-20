@@ -1,77 +1,47 @@
 import React from 'react';
-import { Card, Row, Col, Typography, Space } from 'antd';
-import {
-  ClockCircleOutlined,
-  CalendarOutlined,
-  ExclamationCircleOutlined,
-  FolderOutlined,
-  CheckCircleOutlined,
-  ArrowUpOutlined,
-  ArrowDownOutlined,
-} from '@ant-design/icons';
-import { statsData } from '../mockData';
 
-const { Text, Title } = Typography;
+interface TaskStats {
+  processing?: number;
+  pending?: number;
+  overdue?: number;
+  completed?: number;
+}
 
-// Danh sách Icon hiển thị tương ứng cho từng thẻ
-const cardIcons = [
-  <ClockCircleOutlined style={{ fontSize: '20px', color: '#1677ff' }} />,
-  <CalendarOutlined style={{ fontSize: '20px', color: '#1677ff' }} />,
-  <ExclamationCircleOutlined style={{ fontSize: '20px', color: '#ff4d4f' }} />,
-  <FolderOutlined style={{ fontSize: '20px', color: '#1677ff' }} />,
-  <CheckCircleOutlined style={{ fontSize: '20px', color: '#52c41a' }} />,
-];
+interface StatisticCardProps {
+  stats?: TaskStats | null;
+}
 
-const StatisticCard: React.FC = () => {
+const StatisticCard: React.FC<StatisticCardProps> = ({ stats }) => {
+  const cardStyle = {
+    flex: 1,
+    background: '#fff',
+    padding: '24px',
+    borderRadius: '12px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '12px'
+  };
+
   return (
-    <Row gutter={[16, 16]}>
-      {statsData.map((item, index) => (
-        <Col xs={24} sm={12} md={8} lg={4} key={index} style={{ flex: '1 1 18%', minWidth: '200px' }}>
-          <Card
-            bordered={false}
-            style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0, 0, 0, 0.03)' }}
-            bodyStyle={{ padding: '16px' }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <Text type="secondary" style={{ fontSize: '13px' }}>
-                  {item.title}
-                </Text>
-                <Title level={2} style={{ margin: '4px 0 8px 0', fontWeight: 700, fontSize: '26px' }}>
-                  {item.value}
-                </Title>
-              </div>
-              <div
-                style={{
-                  backgroundColor: '#f5f5f5',
-                  padding: '8px',
-                  borderRadius: '6px',
-                  display: 'flex',
-                  alignItems: 'center',
-                }}
-              >
-                {cardIcons[index]}
-              </div>
-            </div>
-
-            <Space size={4}>
-              <Text
-                style={{
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  color: item.isUp ? '#52c41a' : '#ff4d4f',
-                }}
-              >
-                {item.isUp ? <ArrowUpOutlined /> : <ArrowDownOutlined />} {item.change}
-              </Text>
-              <Text type="secondary" style={{ fontSize: '12px' }}>
-                {item.subText}
-              </Text>
-            </Space>
-          </Card>
-        </Col>
-      ))}
-    </Row>
+    <div style={{ display: 'flex', gap: '24px', marginBottom: '24px' }}>
+      <div style={cardStyle}>
+        <span style={{ color: '#8c8c8c', fontSize: '14px' }}>Công việc đang xử lý</span>
+        <h2 style={{ margin: 0, fontSize: '28px', color: '#1890ff' }}>{stats?.processing ?? 0}</h2>
+      </div>
+      <div style={cardStyle}>
+        <span style={{ color: '#8c8c8c', fontSize: '14px' }}>Công việc đến hạn</span>
+        <h2 style={{ margin: 0, fontSize: '28px', color: '#faad14' }}>{stats?.pending ?? 0}</h2>
+      </div>
+      <div style={cardStyle}>
+        <span style={{ color: '#8c8c8c', fontSize: '14px' }}>Quá hạn</span>
+        <h2 style={{ margin: 0, fontSize: '28px', color: '#f5222d' }}>{stats?.overdue ?? 0}</h2>
+      </div>
+      <div style={cardStyle}>
+        <span style={{ color: '#8c8c8c', fontSize: '14px' }}>Hoàn thành</span>
+        <h2 style={{ margin: 0, fontSize: '28px', color: '#52c41a' }}>{stats?.completed ?? 0}</h2>
+      </div>
+    </div>
   );
 };
 
