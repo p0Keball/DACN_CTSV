@@ -1,7 +1,7 @@
 // frontend/src/services/api.ts
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 // Hàm lấy số liệu thống kê
 export const getTaskStats = async () => {
