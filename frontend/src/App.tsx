@@ -4,7 +4,8 @@ import { Layout, ConfigProvider } from 'antd';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
-import Students from './pages/Students'; // Ta sẽ tạo file này ở bước sau
+import Students from './pages/Students';
+import Tasks from './pages/Tasks';
 
 const { Content } = Layout;
 
@@ -21,6 +22,7 @@ const App: React.FC = () => {
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/sinh-vien" element={<Students />} />
+                <Route path="/cong-viec" element={<Tasks />} />
               </Routes>
             </Content>
           </Layout>
