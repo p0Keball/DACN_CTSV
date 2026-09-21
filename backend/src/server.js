@@ -104,9 +104,16 @@ app.get('/api/tasks/stats', async (req, res) => {
   try {
     const query = `
       SELECT 
-        COUNT(*) FILTER (WHERE status = 'Đang xử lý') AS processing,
-        COUNT(*) FILTER (WHERE status = 'Mới') AS pending,
-        COUNT(*) FILTER (WHERE status = 'Quá hạn') AS overdue,
+        COUNT(*) FILTER (WHERE status = 'Đang xử lý' OR status = 'Mới') AS processing,
+        COUNT(*) FILTER (
+          WHERE status != 'Hoàn thành' 
+          AND deadline::date >= CURRENT_DATE 
+          AND deadline::date <= CURRENT_DATE + INTERVAL '3 days'
+        ) AS pending,
+        COUNT(*) FILTER (
+          WHERE status != 'Hoàn thành' 
+          AND deadline::date < CURRENT_DATE
+        ) AS overdue,
         COUNT(*) FILTER (WHERE status = 'Hoàn thành') AS completed
       FROM tasks;
     `;
