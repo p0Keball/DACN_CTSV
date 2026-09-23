@@ -42,3 +42,18 @@ export const addTask = async (data: Record<string, unknown>) => (await axios.pos
 export const updateTask = async (id: number, data: Record<string, unknown>) => (await axios.put(`${API_BASE_URL}/tasks/${id}`, data)).data;
 export const deleteTask = async (id: number) => (await axios.delete(`${API_BASE_URL}/tasks/${id}`)).data;
 
+// File đính kèm
+// Upload File & Link
+export const getTaskAttachments = async (taskId: number) => (await axios.get(`${API_BASE_URL}/tasks/${taskId}/attachments`)).data;
+export const addTaskAttachmentLink = async (taskId: number, file_url: string) => (await axios.post(`${API_BASE_URL}/tasks/${taskId}/attachments/link`, { file_url })).data;
+export const uploadTaskFiles = async (taskId: number, formData: FormData) => (await axios.post(`${API_BASE_URL}/tasks/${taskId}/attachments/file`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })).data;
+export const deleteAttachment = async (id: number) => (await axios.delete(`${API_BASE_URL}/attachments/${id}`)).data;
+
+// Người nhận email thật (§3.1) + lịch sử gửi + gửi email
+export const getTaskRecipients = async (taskId: number) => (await axios.get(`${API_BASE_URL}/tasks/${taskId}/recipients`)).data;
+export const addTaskRecipient = async (taskId: number, data: object) => (await axios.post(`${API_BASE_URL}/tasks/${taskId}/recipients`, data)).data;
+export const deleteRecipient = async (id: number) => (await axios.delete(`${API_BASE_URL}/recipients/${id}`)).data;
+export const getTaskHistory = async (taskId: number) => (await axios.get(`${API_BASE_URL}/tasks/${taskId}/history`)).data;
+export const sendTaskEmail = async (taskId: number, send_type?: string) => (await axios.post(`${API_BASE_URL}/tasks/${taskId}/send`, { send_type })).data;
+
+

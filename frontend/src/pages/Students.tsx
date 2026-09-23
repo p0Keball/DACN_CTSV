@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Table, Input, Select, Button, Tag, Space, Card, message, Modal, Descriptions, Badge, Tabs, Form, Popconfirm } from 'antd';
+import { Table, Input, Select, Button, Tag, Space, Card, message, Modal, Descriptions, Badge, Tabs, Form, Popconfirm, Divider } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, DownloadOutlined, SyncOutlined } from '@ant-design/icons';
 import { syncStudentsByClass, getStudents, getTeachers, addTeacher, getClasses, assignTeacherToClass, updateTeacher, deleteTeacher, addClass, updateClass, deleteClass, addStudent, updateStudent, deleteStudent } from '../services/api';
 import { exportToExcel } from '../utils/exportExcel';
@@ -230,6 +230,25 @@ const StudentList: React.FC = () => {
         )}
       </Modal>
 
+      <Divider>Thông tin bổ sung</Divider>
+          
+          <Form.Item name="study_program" label="Chương trình đào tạo">
+            <Select placeholder="Chọn chương trình đào tạo" options={[
+              { value: 'CQ23CT-PM', label: 'CQ23CT-PM (Công nghệ phần mềm)' },
+              { value: 'CQ23CT-MM', label: 'CQ23CT-MMT (Mạng máy tính)' },
+            ]} />
+          </Form.Item>
+
+          <Space style={{ display: 'flex', gap: '24px' }}>
+            <Form.Item name="birth_place" label="Nơi sinh (Tỉnh/Thành phố)" style={{ width: '250px' }}>
+              <Input placeholder="VD: Thành phố Hồ Chí Minh" />
+            </Form.Item>
+
+            <Form.Item name="permanent_residence" label="Thường trú" style={{ width: '380px' }}>
+              <Input placeholder="VD: Tổ 3 Măng Line, Phường 7, Đà Lạt..." />
+            </Form.Item>
+          </Space>
+
       <Modal title={editingStudentId ? "Sửa Sinh viên" : "Thêm Sinh viên"} open={isFormVisible} onCancel={() => setIsFormVisible(false)} onOk={() => form.submit()} width={600} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSaveStudent}>
           <Space style={{ display: 'flex', gap: '16px' }}>
@@ -243,6 +262,22 @@ const StudentList: React.FC = () => {
             <Form.Item name="BirthDay" label="Ngày sinh" style={{ width: '200px' }}><Input placeholder="DD/MM/YYYY" /></Form.Item>
           </Space>
           <Form.Item name="ClassRoleID" label="Chức vụ" style={{ width: '150px' }}><Select options={[{value: 0, label: 'Sinh viên'}, {value: 1, label: 'Lớp trưởng'}]} /></Form.Item>
+          <Space style={{ display: 'flex', gap: '24px' }}>
+            <Form.Item name="study_program" label="Chương trình ĐT">
+              <Select placeholder="Chọn chương trình" style={{ width: '200px' }} options={[
+                { value: 'CQ23CT-PM', label: 'CQ23CT-PM' },
+                { value: 'CQ23CT-MMT', label: 'CQ23CT-MMT' },
+              ]} />
+            </Form.Item>
+
+            <Form.Item name="birth_place" label="Nơi sinh">
+              <Input placeholder="VD: Lâm Đồng" style={{ width: '200px' }} />
+            </Form.Item>
+          </Space>
+
+          <Form.Item name="permanent_residence" label="Thường trú">
+            <Input placeholder="VD: Phường 8, TP. Đà Lạt, Lâm Đồng" />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

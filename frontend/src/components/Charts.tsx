@@ -74,7 +74,7 @@ const Charts: React.FC<ChartsProps> = ({ tasks = [] }) => {
         <ResponsiveContainer width="100%" height={300}>
           <PieChart>
             <Pie data={pieChartData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} label>
-              {pieChartData.map((entry, index) => (
+              {pieChartData.map((_entry, index) => (
                 <Cell key={`cell-${index}`} fill={['#1890ff', '#52c41a', '#faad14', '#f5222d'][index % 4]} />
               ))}
             </Pie>

@@ -9,6 +9,26 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Tạo thư mục 'uploads' nếu chưa tồn tại để chứa file PDF/Word
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Cấu hình Multer để đổi tên file tránh trùng lặp
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, Date.now() + '-' + Buffer.from(file.originalname, 'latin1').toString('utf8'))
+});
+const upload = multer({ storage: storage });
+
+// Mở public thư mục uploads để Frontend có thể click vào xem/tải file
+app.use('/uploads', express.static(uploadDir));
+
 // API đồng bộ sinh viên từ DLU Proxy
 app.post('/api/students/sync', async (req, res) => {
   const { classId } = req.body;
@@ -94,22 +114,13 @@ app.post('/api/students/sync', async (req, res) => {
   }
 });
 
-// 1. API lấy danh sách toàn bộ công việc
-app.get('/api/tasks', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM tasks ORDER BY created_at DESC');
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
 // 2. API lấy thống kê tổng quan số lượng công việc
+// Status chuẩn (§3.1): Mới tạo / Đã soạn / Đã gửi / Chờ phản hồi / Đang xử lý / Hoàn thành / Quá hạn
 app.get('/api/tasks/stats', async (req, res) => {
   try {
     const query = `
-      SELECT 
-        COUNT(*) FILTER (WHERE status = 'Đang xử lý' OR status = 'Mới') AS processing,
+      SELECT
+        COUNT(*) FILTER (WHERE status IN ('Mới', 'Mới tạo', 'Đang xử lý', 'Đã soạn', 'Đã gửi', 'Chờ phản hồi')) AS processing,
         COUNT(*) FILTER (
           WHERE status != 'Hoàn thành' 
           AND deadline::date >= CURRENT_DATE 
@@ -280,22 +291,25 @@ app.get('/api/tasks', async (req, res) => {
 });
 
 app.post('/api/tasks', async (req, res) => {
-  const { title, content, deadline, priority, status, source, semester } = req.body;
+  const { title, content, deadline, priority, status, source, semester, task_type, ref_doc_number, ref_issue_date, remind_before_days } = req.body;
   try {
     const result = await pool.query(
-      'INSERT INTO tasks (title, content, deadline, priority, status, source, semester) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [title, content, deadline, priority || 'Bình thường', status || 'Mới', source || 'Thủ công', semester]
+      `INSERT INTO tasks (title, content, deadline, priority, status, source, semester, task_type, ref_doc_number, ref_issue_date, remind_before_days)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [title, content, deadline, priority || 'Bình thường', status || 'Mới tạo', source || 'Thủ công', semester, task_type || 'ThongBaoDon', ref_doc_number || null, ref_issue_date || null, remind_before_days ?? 0]
     );
     res.json({ success: true, data: result.rows[0] });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 app.put('/api/tasks/:id', async (req, res) => {
-  const { title, content, deadline, priority, status, source, semester } = req.body;
+  const { title, content, deadline, priority, status, source, semester, task_type, ref_doc_number, ref_issue_date, remind_before_days } = req.body;
   try {
     await pool.query(
-      'UPDATE tasks SET title=$1, content=$2, deadline=$3, priority=$4, status=$5, source=$6, semester=$7, updated_at=CURRENT_TIMESTAMP WHERE id=$8',
-      [title, content, deadline, priority, status, source, semester, req.params.id]
+      `UPDATE tasks SET title=$1, content=$2, deadline=$3, priority=$4, status=$5, source=$6, semester=$7,
+        task_type=COALESCE($8, task_type), ref_doc_number=$9, ref_issue_date=$10,
+        remind_before_days=COALESCE($11, remind_before_days), updated_at=CURRENT_TIMESTAMP WHERE id=$12`,
+      [title, content, deadline, priority, status, source, semester, task_type || null, ref_doc_number || null, ref_issue_date || null, remind_before_days ?? null, req.params.id]
     );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
@@ -307,6 +321,114 @@ app.delete('/api/tasks/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
+
+// === QUẢN LÝ TẬP TIN ĐÍNH KÈM (TASK ATTACHMENTS) ===
+// 1. Lấy danh sách file đính kèm của 1 công việc
+app.get('/api/tasks/:taskId/attachments', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM task_attachments WHERE task_id = $1', [req.params.taskId]);
+    res.json({ success: true, data: result.rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// 2. Lưu Link Google Docs / Trang tính
+app.post('/api/tasks/:taskId/attachments/link', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'INSERT INTO task_attachments (task_id, file_name, file_url, file_type) VALUES ($1, $2, $3, $4) RETURNING *',
+      [req.params.taskId, 'Đường dẫn Tài liệu / Trang tính (Google Drive)', req.body.file_url, 'link']
+    );
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// 3. Upload File (PDF, Word) lưu vào local máy
+app.post('/api/tasks/:taskId/attachments/file', upload.array('files'), async (req, res) => {
+  try {
+    const taskId = req.params.taskId;
+    const attachments = [];
+    
+    for (const file of req.files) {
+      const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
+      const result = await pool.query(
+        'INSERT INTO task_attachments (task_id, file_name, file_url, file_size, file_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [taskId, Buffer.from(file.originalname, 'latin1').toString('utf8'), fileUrl, file.size.toString(), file.mimetype]
+      );
+      attachments.push(result.rows[0]);
+    }
+    res.json({ success: true, data: attachments });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// 4. Xóa file đính kèm
+app.delete('/api/attachments/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM task_attachments WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// === NGƯỜI NHẬN EMAIL THẬT (§3.1: khác "Nơi nhận" của eOffice) ===
+app.get('/api/tasks/:taskId/recipients', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM task_recipients WHERE task_id = $1 ORDER BY id', [req.params.taskId]);
+    res.json({ success: true, data: result.rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/tasks/:taskId/recipients', async (req, res) => {
+  const { recipient_email, recipient_name, recipient_group } = req.body;
+  if (!recipient_email) return res.status(400).json({ success: false, message: 'Thiếu email người nhận' });
+  try {
+    const result = await pool.query(
+      'INSERT INTO task_recipients (task_id, recipient_email, recipient_name, recipient_group) VALUES ($1, $2, $3, $4) RETURNING *',
+      [req.params.taskId, recipient_email, recipient_name || null, recipient_group || null]
+    );
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.delete('/api/recipients/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM task_recipients WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// === LỊCH SỬ GỬI (§3.1 LichSuGui — dùng bảng email_reminders) ===
+app.get('/api/tasks/:taskId/history', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM email_reminders WHERE task_id = $1 ORDER BY created_at DESC', [req.params.taskId]);
+    res.json({ success: true, data: result.rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// === GỬI EMAIL (giai đoạn hiện tại: ghi log "Đã gửi", chưa gửi SMTP thật) ===
+app.post('/api/tasks/:taskId/send', async (req, res) => {
+  try {
+    const taskId = req.params.taskId;
+    const taskRes = await pool.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+    if (taskRes.rows.length === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy công việc' });
+    const task = taskRes.rows[0];
+    const recipRes = await pool.query('SELECT * FROM task_recipients WHERE task_id = $1', [taskId]);
+    if (recipRes.rows.length === 0) return res.status(400).json({ success: false, message: 'Chưa có người nhận nào. Hãy thêm người nhận trước khi gửi.' });
+
+    const sendType = req.body.send_type || 'Gửi lần đầu';
+    const logs = [];
+    for (const r of recipRes.rows) {
+      const result = await pool.query(
+        `INSERT INTO email_reminders (task_id, recipient_email, recipient_type, subject, body_content, send_type, scheduled_at, sent_at, status)
+         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'Đã gửi') RETURNING *`,
+        [taskId, r.recipient_email, r.recipient_group || 'GVCN', task.title, task.content || '', sendType]
+      );
+      logs.push(result.rows[0]);
+    }
+    await pool.query(`UPDATE tasks SET status='Đã gửi', updated_at=CURRENT_TIMESTAMP WHERE id=$1`, [taskId]);
+    res.json({ success: true, data: logs });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server Backend running on http://localhost:${PORT}`));
