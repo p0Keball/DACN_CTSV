@@ -1,15 +1,20 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Table, Input, Select, Button, Tag, Space, Card, message, Modal, Descriptions, Badge, Tabs, Form, Popconfirm, Divider } from 'antd';
+import { 
+  Table, Input, Select, Button, Tag, Space, Card, message, Modal, 
+  Descriptions, Badge, Tabs, Form, Popconfirm, Divider, List 
+} from 'antd';
 import { 
   PlusOutlined, EditOutlined, DeleteOutlined, 
-  SearchOutlined, DownloadOutlined, SyncOutlined, MailOutlined 
-} from '@ant-design/icons';import { 
+  SearchOutlined, DownloadOutlined, SyncOutlined, MailOutlined,
+  PaperClipOutlined, SendOutlined, CopyOutlined
+} from '@ant-design/icons';
+import { 
   syncStudentsByClass, getStudents, getTeachers, addTeacher, 
   getClasses, assignTeacherToClass, updateTeacher, deleteTeacher, 
-  addClass, updateClass, deleteClass, addStudent, updateStudent, deleteStudent 
+  addClass, updateClass, deleteClass, addStudent, updateStudent, deleteStudent,
+  getTasks, getTaskAttachments
 } from '../services/api';
 import { exportToExcel } from '../utils/exportExcel';
-
 
 const { Option } = Select;
 
@@ -42,6 +47,21 @@ interface ClassItem {
   teacher_name: string | null;
 }
 
+interface Task {
+  id: number;
+  title: string;
+  content: string;
+  deadline: string;
+  priority: string;
+  status: string;
+  semester?: string;
+}
+
+interface Attachment {
+  id: number;
+  file_name: string;
+  file_url: string;
+}
 
 // --- COMPONENT: DANH SÁCH SINH VIÊN ---
 interface StudentListProps {
@@ -61,6 +81,15 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [form] = Form.useForm();
+
+  // --- STATE CHO MODAL SOẠN EMAIL CÔNG VIỆC ---
+  const [isEmailModalVisible, setIsEmailModalVisible] = useState(false);
+  const [availableTasks, setAvailableTasks] = useState<Task[]>([]);
+  const [loadingTasks, setLoadingTasks] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [taskAttachments, setTaskAttachments] = useState<Attachment[]>([]);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
 
   const openAddStudent = () => { setEditingStudentId(null); form.resetFields(); setIsFormVisible(true); };
   const openEditStudent = (record: Student) => { setEditingStudentId(record.StudentID); form.setFieldsValue(record); setIsFormVisible(true); };
@@ -95,7 +124,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
     });
   }, [students, selectedClass, searchText]);
 
-  // Đăng ký hàm xuất Excel lên Component cha (Đã sửa lỗi tự tải file)
+  // Đăng ký hàm xuất Excel lên Component cha
   useEffect(() => {
     onExportAction(() => () => {
       if (filteredStudents.length === 0) {
@@ -125,11 +154,6 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
     } else message.error('Lỗi khi lưu thông tin sinh viên');
   };
 
-  const handleDeleteStudent = async (id: string) => {
-    const res = await deleteStudent(id);
-    if (res.success) { message.success('Xóa thành công!'); loadStudents(); }
-  };
-
   const handleDeleteMultiple = async () => {
     if (selectedRowKeys.length === 0) return;
     setLoading(true);
@@ -145,34 +169,98 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
     }
   };
 
-  // Tính năng soạn Email qua Gmail Web có kèm Chữ ký (Footer)
-  const handleComposeEmail = () => {
+  // --- XỬ LÝ MỞ MODAL SOẠN EMAIL CÔNG VIỆC ---
+  const handleOpenEmailModal = async () => {
     if (selectedRowKeys.length === 0) return;
-
-    // 1. Tạo mảng email từ MSSV đã chọn
-    const emails = selectedRowKeys.map(id => `${id}@dlu.edu.vn`);
-    const bccList = emails.join(',');
-
-    // 2. Thiết lập nội dung Chữ ký (Footer) mặc định
-    // Bạn có thể tùy chỉnh lại thông tin bên dưới sao cho phù hợp
-    const emailFooter = `
-
-
-------------------------------------------------------
-Phòng Công tác Sinh viên (CTSV)
-Trường Đại học Đà Lạt (DLU)
-Địa chỉ: 01 Phù Đổng Thiên Vương, Phường 8, TP. Đà Lạt
-Email: ctsv@dlu.edu.vn
-Điện thoại: 02633.xxx.xxx`;
-
-    // 3. Mã hóa nội dung để truyền qua URL (Giữ nguyên được dấu xuống dòng)
-    const encodedBody = encodeURIComponent(emailFooter);
-
-    // 4. Tạo URL mở thẳng giao diện soạn thư của Gmail Web (Thêm tham số &body)
-    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&bcc=${bccList}&body=${encodedBody}`;
+    setIsEmailModalVisible(true);
+    setLoadingTasks(true);
+    setSelectedTaskId(null);
+    setTaskAttachments([]);
+    setEmailSubject('[DLU CTSV] Thông báo từ Phòng Công tác Sinh viên');
     
-    // 5. Mở trang Gmail trong tab mới
-    window.open(gmailUrl, '_blank');
+    // Tạo footer tiêu chuẩn
+    const footer = `\n\n------------------------------------------------------\nPhòng Công tác Sinh viên (CTSV)\nTrường Đại học Đà Lạt (DLU)\nĐịa chỉ: 01 Phù Đổng Thiên Vương, Phường 8, TP. Đà Lạt\nEmail: ctsv@dlu.edu.vn\nĐiện thoại: 02633.xxx.xxx`;
+    setEmailBody(`Kính gửi các bạn sinh viên,${footer}`);
+
+    try {
+      const res = await getTasks();
+      if (res.success) {
+        setAvailableTasks(res.data);
+      }
+    } catch (error) {
+      message.error('Không thể tải danh sách công việc');
+    } finally {
+      setLoadingTasks(false);
+    }
+  };
+
+  // Khi chọn 1 Công việc từ Dropdown
+  const handleSelectTask = async (taskId: number) => {
+    setSelectedTaskId(taskId);
+    const task = availableTasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    let attachments: Attachment[] = [];
+    try {
+      const res = await getTaskAttachments(taskId);
+      if (res.success) {
+        attachments = res.data;
+        setTaskAttachments(res.data);
+      }
+    } catch {
+      setTaskAttachments([]);
+    }
+
+    // Tự động dựng Tiêu đề & Nội dung
+    setEmailSubject(`[DLU CTSV] ${task.title}`);
+
+    let body = `Kính gửi các bạn sinh viên,\n\n`;
+    body += `Phòng Công tác Sinh viên thông báo về công việc/sự kiện: "${task.title}".\n\n`;
+    
+    if (task.content) {
+      body += `📌 NỘI DUNG CHI TIẾT:\n${task.content}\n\n`;
+    }
+    
+    if (task.deadline) {
+      const formattedDeadline = new Date(task.deadline).toLocaleString('vi-VN');
+      body += `⏰ HẠN CHÓT THỰC HIỆN: ${formattedDeadline}\n\n`;
+    }
+
+    if (attachments.length > 0) {
+      body += `📎 TỆP ĐÍNH KÈM / TÀI LIỆU LIÊN QUAN:\n`;
+      attachments.forEach((att, idx) => {
+        body += `${idx + 1}. ${att.file_name}: ${att.file_url}\n`;
+      });
+      body += `\n`;
+    }
+
+    body += `Đề nghị các bạn sinh viên chú ý theo dõi và thực hiện đúng thời hạn.\n\nTrân trọng!`;
+    body += `\n\n------------------------------------------------------\nPhòng Công tác Sinh viên (CTSV)\nTrường Đại học Đà Lạt (DLU)\nĐịa chỉ: 01 Phù Đổng Thiên Vương, Phường 8, TP. Đà Lạt\nEmail: ctsv@dlu.edu.vn\nĐiện thoại: 02633.xxx.xxx`;
+
+    setEmailBody(body);
+  };
+
+  // Tiến hành mở Gmail để gửi Email
+  const handleSendEmailViaGmail = async () => {
+    const emails = selectedRowKeys.map(id => `${id}@dlu.edu.vn`);
+    const bccList = emails.join(', ');
+
+    if (selectedRowKeys.length > 10) {
+      try {
+        await navigator.clipboard.writeText(bccList);
+        message.success(`Đã sao chép ${selectedRowKeys.length} email! Hãy bấm Ctrl+V vào ô BCC trên Gmail.`);
+      } catch (err) {
+        message.warning('Không thể tự động chép email, vui lòng kiểm tra quyền truy cập Clipboard.');
+      }
+
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+      window.open(gmailUrl, '_blank');
+    } else {
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(bccList)}&su=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+      window.open(gmailUrl, '_blank');
+    }
+
+    setIsEmailModalVisible(false);
   };
 
   const columns = [
@@ -196,12 +284,12 @@ Email: ctsv@dlu.edu.vn
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAddStudent}>Thêm Sinh Viên</Button>
         
-        {/* 🔥 Hiện nút Gửi Email và Xóa khi có item được tick */}
+        {/* Nút Gửi Email và Xóa khi có item được tick */}
         {selectedRowKeys.length > 0 && (
           <Space>
             <Button 
               icon={<MailOutlined />} 
-              onClick={handleComposeEmail}
+              onClick={handleOpenEmailModal}
               style={{ backgroundColor: '#eab308', color: '#fff', borderColor: '#eab308' }}
             >
               Gửi Email ({selectedRowKeys.length})
@@ -221,12 +309,99 @@ Email: ctsv@dlu.edu.vn
         rowKey="StudentID" 
         loading={loading} 
         pagination={{
-    defaultPageSize: 10,
-    showSizeChanger: true,
-    pageSizeOptions: ['10', '20', '50', '100'],
-    showTotal: (total, range) => `${range[0]}-${range[1]} của ${total} bản ghi`,
-  }}/>
+          defaultPageSize: 10,
+          showSizeChanger: true,
+          pageSizeOptions: ['10', '20', '50', '100'],
+          showTotal: (total, range) => `${range[0]}-${range[1]} của ${total} bản ghi`,
+        }}
+      />
 
+      {/* --- MODAL SOẠN EMAIL CÔNG VIỆC GỬI SINH VIÊN --- */}
+      <Modal
+        title={<Space><MailOutlined style={{ color: '#eab308' }} /> Soạn Email Gửi Sinh Viên</Space>}
+        open={isEmailModalVisible}
+        onCancel={() => setIsEmailModalVisible(false)}
+        width={750}
+        destroyOnClose
+        footer={[
+          <Button key="cancel" onClick={() => setIsEmailModalVisible(false)}>Hủy</Button>,
+          <Button 
+            key="send" 
+            type="primary" 
+            icon={<SendOutlined />} 
+            onClick={handleSendEmailViaGmail}
+            style={{ backgroundColor: '#eab308', borderColor: '#eab308' }}
+          >
+            Mở trên Gmail ({selectedRowKeys.length} SV)
+          </Button>
+        ]}
+      >
+        <Form layout="vertical">
+          <Form.Item label="Chọn Công việc có sẵn (để chèn nội dung & file đính kèm)">
+            <Select
+              showSearch
+              placeholder="-- Chọn công việc/thông báo --"
+              loading={loadingTasks}
+              value={selectedTaskId}
+              onChange={handleSelectTask}
+              optionFilterProp="children"
+              allowClear
+              onClear={() => {
+                setSelectedTaskId(null);
+                setTaskAttachments([]);
+              }}
+            >
+              {availableTasks.map(t => (
+                <Option key={t.id} value={t.id}>
+                  [{t.semester || 'Thông báo'}] {t.title}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          {taskAttachments.length > 0 && (
+            <Card size="small" style={{ marginBottom: 16, backgroundColor: '#f6ffed', borderColor: '#b7eb8f' }}>
+              <div style={{ fontWeight: 500, marginBottom: 8, color: '#389e0d' }}>
+                <PaperClipOutlined /> Các file đính kèm trong công việc ({taskAttachments.length}):
+              </div>
+              <List
+                size="small"
+                dataSource={taskAttachments}
+                renderItem={(item) => (
+                  <List.Item key={item.id} style={{ padding: '4px 0' }}>
+                    <a href={item.file_url} target="_blank" rel="noopener noreferrer">
+                      📄 {item.file_name}
+                    </a>
+                  </List.Item>
+                )}
+              />
+            </Card>
+          )}
+
+          <Form.Item label="Tiêu đề Email (Subject)" required>
+            <Input 
+              value={emailSubject} 
+              onChange={(e) => setEmailSubject(e.target.value)} 
+              placeholder="Nhập tiêu đề email..."
+            />
+          </Form.Item>
+
+          <Form.Item label="Nội dung Email (Body)" required>
+            <Input.TextArea 
+              rows={10} 
+              value={emailBody} 
+              onChange={(e) => setEmailBody(e.target.value)} 
+              placeholder="Nhập nội dung email..."
+            />
+          </Form.Item>
+
+          <Tag color="blue">
+            Sẽ gửi tới {selectedRowKeys.length} sinh viên đã chọn (qua ô BCC để bảo mật thông tin người nhận)
+          </Tag>
+        </Form>
+      </Modal>
+
+      {/* Modal Hồ Sơ Sinh Viên */}
       <Modal title={<div style={{ fontSize: '18px', color: '#237804', marginBottom: '16px' }}>Hồ sơ sinh viên</div>} open={isModalVisible} onCancel={() => setIsModalVisible(false)} footer={[<Button key="close" onClick={() => setIsModalVisible(false)}>Đóng</Button>]} width={700}>
         {selectedStudent && (
           <Descriptions bordered column={2} size="small" labelStyle={{ width: '130px', background: '#fafafa', fontWeight: 500 }}>
@@ -244,6 +419,7 @@ Email: ctsv@dlu.edu.vn
         )}
       </Modal>
 
+      {/* Modal Thêm/Sửa Sinh Viên */}
       <Modal title={editingStudentId ? "Sửa Sinh viên" : "Thêm Sinh viên"} open={isFormVisible} onCancel={() => setIsFormVisible(false)} onOk={() => form.submit()} width={600} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSaveStudent}>
           <Space style={{ display: 'flex', gap: '16px' }}>
