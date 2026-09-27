@@ -6,7 +6,7 @@ import {
 import { 
   PlusOutlined, EditOutlined, DeleteOutlined, 
   SearchOutlined, DownloadOutlined, SyncOutlined, MailOutlined,
-  PaperClipOutlined, SendOutlined, CopyOutlined
+  PaperClipOutlined, SendOutlined
 } from '@ant-design/icons';
 import { 
   syncStudentsByClass, getStudents, getTeachers, addTeacher, 
@@ -18,7 +18,7 @@ import { exportToExcel } from '../utils/exportExcel';
 
 const { Option } = Select;
 
-// --- CÁC INTERFACE ---
+//#region --- CÁC INTERFACE ---
 interface Student {
   StudentID: string;
   FirstName: string;
@@ -62,8 +62,10 @@ interface Attachment {
   file_name: string;
   file_url: string;
 }
+//#endregion
 
-// --- COMPONENT: DANH SÁCH SINH VIÊN ---
+
+//#region --- COMPONENT: DANH SÁCH SINH VIÊN ---
 interface StudentListProps {
   searchText: string;
   selectedClass: string;
@@ -450,8 +452,10 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
     </div>
   );
 };
+//#endregion
 
-// --- COMPONENT: QUẢN LÝ GIẢNG VIÊN ---
+
+//#region --- COMPONENT: QUẢN LÝ GIẢNG VIÊN ---
 interface TeacherListProps {
   searchText: string;
 }
@@ -556,8 +560,10 @@ const TeacherList: React.FC<TeacherListProps> = ({ searchText }) => {
     </div>
   );
 };
+//#endregion
 
-// --- COMPONENT: QUẢN LÝ LỚP HỌC ---
+
+//#region --- COMPONENT: QUẢN LÝ LỚP HỌC ---
 interface ClassManagementProps {
   searchText: string;
 }
@@ -649,8 +655,10 @@ const ClassManagement: React.FC<ClassManagementProps> = ({ searchText }) => {
     </div>
   );
 };
+//#endregion
 
-// --- COMPONENT CHÍNH QUẢN LÝ BAO QUÁT ---
+
+//#region --- COMPONENT CHÍNH QUẢN LÝ BAO QUÁT ---
 const AcademicManagement: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('1');
   const [searchText, setSearchText] = useState<string>('');
@@ -766,5 +774,7 @@ const AcademicManagement: React.FC = () => {
     </div>
   );
 };
+//#endregion
+
 
 export default AcademicManagement;
