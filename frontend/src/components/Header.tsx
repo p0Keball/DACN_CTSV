@@ -1,35 +1,42 @@
 import React from 'react';
-import { Layout, Input, Select, Badge, Avatar, Space, Typography } from 'antd';
-import { SearchOutlined, BellOutlined, UserOutlined } from '@ant-design/icons';
+import { Layout, Menu, Badge, Avatar, Space, Typography } from 'antd';
+import {
+  DashboardOutlined,
+  UnorderedListOutlined,
+  ApartmentOutlined,
+  UserOutlined,
+  FolderOutlined,
+  BarChartOutlined,
+  BellOutlined,
+  ReadOutlined,
+} from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const { Header: AntHeader } = Layout;
-const { Title, Text } = Typography;
+const { Text } = Typography;
+
+// Định nghĩa menu 
+const menuItems = [
+  { key: '/', icon: <DashboardOutlined />, label: 'Tổng quan' },
+  { key: '/cong-viec', icon: <UnorderedListOutlined />, label: 'Công việc' },
+  { key: '/quy-trinh', icon: <ApartmentOutlined />, label: 'Quy trình' },
+  { key: '/sinh-vien', icon: <UserOutlined />, label: 'Quản lý đào tạo' },
+  { key: '/ho-so', icon: <FolderOutlined />, label: 'Hồ sơ' },
+  { key: '/bao-cao', icon: <BarChartOutlined />, label: 'Báo cáo' },
+  { key: '/thong-bao', icon: <BellOutlined />, label: 'Thông báo' },
+];
 
 const Header: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // 1. Phân tích tham số từ URL hiện tại
-  const searchParams = new URLSearchParams(location.search);
-  const currentSearch = searchParams.get('search') || '';
-  const currentHk = searchParams.get('hk') || undefined;
-  const currentYear = searchParams.get('year') || undefined;
-
-  // 2. Hàm xử lý khi người dùng thay đổi bộ lọc
-  const handleFilterChange = (key: string, value: string) => {
-    if (value) {
-      searchParams.set(key, value);
-    } else {
-      searchParams.delete(key); // Xóa param nếu người dùng xóa trống
-    }
-    // Điều hướng sang URL mới chứa tham số lọc
-    navigate(`${location.pathname}?${searchParams.toString()}`);
-  };
-
   return (
     <AntHeader
       style={{
+        position: 'sticky', // Giữ UI menu không bị kéo theo khi cuộn
+        top: 0,
+        zIndex: 1000,
+        width: '100%',
         background: '#ffffff',
         padding: '0 24px',
         display: 'flex',
@@ -39,61 +46,38 @@ const Header: React.FC = () => {
         height: '64px',
       }}
     >
-      {/* Cột trái: Tiêu đề */}
-      <Title level={4} style={{ margin: 0, textTransform: 'uppercase' }}>
-        Tổng quan Dashboard
-      </Title>
-
-      {/* Cột giữa: Bộ lọc Tìm kiếm, Học kỳ, Năm học */}
-      <Space size="large">
-        <Input
-          placeholder="Tìm kiếm công việc..."
-          prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
-          defaultValue={currentSearch}
-          allowClear
-          onPressEnter={(e) => handleFilterChange('search', (e.target as HTMLInputElement).value)}
-          style={{ width: 300 }}
-        />
+      {/* Vùng bên trái: Logo và Menu */}
+      <div style={{ display: 'flex', alignItems: 'center', flex: 1, overflow: 'hidden' }}>
         
-        <Space>
-          <Text type="secondary">Học kỳ</Text>
-          <Select
-            placeholder="Chọn HK"
-            value={currentHk}
-            allowClear
-            onChange={(value) => handleFilterChange('hk', value)}
-            options={[
-              { value: 'HK1', label: 'Học kỳ 1' },
-              { value: 'HK2', label: 'Học kỳ 2' },
-              { value: 'HK3', label: 'Học kỳ 3' }
-            ]}
-            style={{ width: 110 }}
-          />
-        </Space>
+        {/* Logo */}
+        <div 
+          onClick={() => navigate('/')}
+          style={{ display: 'flex', alignItems: 'center', gap: '12px', marginRight: '32px', cursor: 'pointer' }}
+        >
+          <div style={{ backgroundColor: '#237804', borderRadius: '8px', padding: '6px', display: 'flex' }}>
+            <ReadOutlined style={{ fontSize: '20px', color: '#ffffff' }} />
+          </div>
+          <div style={{ fontWeight: 'bold', fontSize: '13px', color: '#1f1f1f', lineHeight: '1.3' }}>
+            TRỢ LÝ<br />CTSV
+          </div>
+        </div>
 
-        <Space>
-          <Text type="secondary">Năm học</Text>
-          <Select
-            placeholder="Năm học"
-            value={currentYear}
-            allowClear
-            onChange={(value) => handleFilterChange('year', value)}
-            options={[
-              { value: '2024-2025', label: '2024-2025' },
-              { value: '2025-2026', label: '2025-2026' },
-              { value: '2026-2027', label: '2026-2027' }
-            ]}
-            style={{ width: 130 }}
-          />
-        </Space>
-      </Space>
+        {/* Menu ngang */}
+        <Menu
+          mode="horizontal"
+          selectedKeys={[location.pathname]}
+          onClick={(e) => navigate(e.key)}
+          items={menuItems}
+          style={{ borderBottom: 'none', flex: 1, minWidth: 0, lineHeight: '62px' }}
+        />
+      </div>
 
-      {/* Cột phải: Thông báo & Tài khoản người dùng */}
-      <Space size="large" align="center">
+      {/* Vùng bên phải: Thông báo & Tài khoản */}
+      <Space size="large" align="center" style={{ marginLeft: '16px' }}>
         <Badge count={3}>
           <BellOutlined style={{ fontSize: '20px', cursor: 'pointer' }} />
         </Badge>
-        <Space>
+        <Space style={{ cursor: 'pointer' }}>
           <Avatar icon={<UserOutlined />} style={{ backgroundColor: '#1677ff' }} />
           <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2' }}>
             <Text strong>Nguyễn Văn A</Text>
