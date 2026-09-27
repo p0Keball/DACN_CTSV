@@ -1,5 +1,6 @@
 # DACN_CTSV
 Xây dựng website số hóa quy trình làm việc của công tác sinh viên
+Link web:dacn-ctsv.netlify.app
 
 ## Danh sách thành viên
 
@@ -10,7 +11,6 @@ Xây dựng website số hóa quy trình làm việc của công tác sinh viên
 | 3 | 2312690 | Nguyễn Nhất Minh| 2312690@dlu.edu.vn| 
 
 ## Setup sau khi pull code
-
 ### 1.Thiết lập Backend:
 Thư mục: backend/
 Mở command prompt và di chuyển vào thư mục backend bằng lệnh: cd DACN_CTSV/backend
