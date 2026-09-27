@@ -1,11 +1,19 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Table, Input, Select, Button, Tag, Space, Card, message, Modal, Descriptions, Badge, Tabs, Form, Popconfirm, Divider } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, DownloadOutlined, SyncOutlined } from '@ant-design/icons';
-import { syncStudentsByClass, getStudents, getTeachers, addTeacher, getClasses, assignTeacherToClass, updateTeacher, deleteTeacher, addClass, updateClass, deleteClass, addStudent, updateStudent, deleteStudent } from '../services/api';
+import { 
+  PlusOutlined, EditOutlined, DeleteOutlined, 
+  SearchOutlined, DownloadOutlined, SyncOutlined, MailOutlined 
+} from '@ant-design/icons';import { 
+  syncStudentsByClass, getStudents, getTeachers, addTeacher, 
+  getClasses, assignTeacherToClass, updateTeacher, deleteTeacher, 
+  addClass, updateClass, deleteClass, addStudent, updateStudent, deleteStudent 
+} from '../services/api';
 import { exportToExcel } from '../utils/exportExcel';
+
 
 const { Option } = Select;
 
+// --- CÁC INTERFACE ---
 interface Student {
   StudentID: string;
   FirstName: string;
@@ -34,13 +42,19 @@ interface ClassItem {
   teacher_name: string | null;
 }
 
-// 1. Tách phần quản lý sinh viên hiện tại thành một component riêng (Tab 1)
-const StudentList: React.FC = () => {
+
+// --- COMPONENT: DANH SÁCH SINH VIÊN ---
+interface StudentListProps {
+  searchText: string;
+  selectedClass: string;
+  onExportAction: (action: () => void) => void;
+}
+
+const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, onExportAction }) => {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
-  const [selectedClass, setSelectedClass] = useState<string>('all');
-  const [searchText, setSearchText] = useState<string>('');
-  
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
 
@@ -51,17 +65,13 @@ const StudentList: React.FC = () => {
   const openAddStudent = () => { setEditingStudentId(null); form.resetFields(); setIsFormVisible(true); };
   const openEditStudent = (record: Student) => { setEditingStudentId(record.StudentID); form.setFieldsValue(record); setIsFormVisible(true); };
 
-  
-
   const loadStudents = useCallback(async () => {
     setLoading(true);
     try {
       const res = await getStudents();
-      if (res.success) {
-        setStudents(res.data);
-      }
+      if (res.success) setStudents(res.data);
     } catch (error) {
-      message.error('Không thể tải dữ liệu từ máy chủ');
+      message.error('Không thể tải dữ liệu sinh viên');
     } finally {
       setLoading(false);
     }
@@ -69,33 +79,9 @@ const StudentList: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    const fetchData = async () => {
-      if (isMounted) await loadStudents();
-    };
-    fetchData();
+    if (isMounted) loadStudents();
     return () => { isMounted = false; };
   }, [loadStudents]);
-
-  const handleSync = async () => {
-    if (selectedClass === 'all') {
-      message.warning('Vui lòng chọn một lớp cụ thể để đồng bộ!');
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await syncStudentsByClass(selectedClass);
-      if (res.success) {
-        message.success(`Đồng bộ thành công ${res.data.length} sinh viên lớp ${selectedClass}`);
-        await loadStudents();
-      } else {
-        message.error(res.message || 'Lỗi đồng bộ dữ liệu');
-      }
-    } catch (error) {
-      message.error('Không thể kết nối đến máy chủ Backend');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const filteredStudents = useMemo(() => {
     return students.filter((student) => {
@@ -103,115 +89,143 @@ const StudentList: React.FC = () => {
       const searchLower = searchText.toLowerCase();
       const mssv = student.StudentID.toLowerCase();
       const fullName = `${student.FirstName} ${student.LastName}`.toLowerCase();
-      const reverseName = `${student.LastName} ${student.FirstName}`.toLowerCase();
       
-      const matchSearch = mssv.includes(searchLower) || fullName.includes(searchLower) || reverseName.includes(searchLower);
+      const matchSearch = mssv.includes(searchLower) || fullName.includes(searchLower);
       return matchClass && matchSearch;
     });
   }, [students, selectedClass, searchText]);
 
-  // Thêm sửa xóa sinh viên
+  // Đăng ký hàm xuất Excel lên Component cha (Đã sửa lỗi tự tải file)
+  useEffect(() => {
+    onExportAction(() => () => {
+      if (filteredStudents.length === 0) {
+        message.warning('Không có dữ liệu sinh viên để xuất!');
+        return;
+      }
+      const dataToExport = filteredStudents.map(student => ({
+        ...student,
+        ClassRoleID: student.ClassRoleID === 1 ? 'Lớp trưởng' : 'Sinh viên'
+      }));
+      const columnMapping = { 
+        StudentID: 'MSSV', FirstName: 'Họ và tên đệm', LastName: 'Tên', 
+        ClassStudentID: 'Lớp', BirthDay: 'Ngày sinh', Gender: 'Giới tính', 
+        ClassRoleID: 'Chức vụ', BirthPlace: 'Nơi sinh', PermanentResidence: 'Thường trú' 
+      };
+      const fileName = selectedClass === 'all' ? 'Danh_sach_sinh_vien' : `Danh_sach_sinh_vien_${selectedClass}`;
+      exportToExcel(dataToExport, columnMapping, fileName);
+    });
+  }, [filteredStudents, selectedClass, onExportAction]);
+
   const handleSaveStudent = async (values: Record<string, unknown>) => {
     const res = editingStudentId ? await updateStudent(editingStudentId, values) : await addStudent(values);
     if (res.success) {
       message.success(`${editingStudentId ? 'Cập nhật' : 'Thêm'} sinh viên thành công!`);
       setIsFormVisible(false);
       loadStudents();
-    } else message.error('Lỗi khi lưu sinh viên');
+    } else message.error('Lỗi khi lưu thông tin sinh viên');
   };
 
   const handleDeleteStudent = async (id: string) => {
     const res = await deleteStudent(id);
     if (res.success) { message.success('Xóa thành công!'); loadStudents(); }
-    else message.error('Lỗi khi xóa');
   };
 
-  // 🔥 Xử lý sự kiện bấm nút Xuất Excel
-  const handleExportExcel = () => {
-    if (filteredStudents.length === 0) {
-      message.warning('Không có dữ liệu để xuất!');
-      return;
+  const handleDeleteMultiple = async () => {
+    if (selectedRowKeys.length === 0) return;
+    setLoading(true);
+    try {
+      await Promise.all(selectedRowKeys.map(id => deleteStudent(id as string)));
+      message.success(`Đã xóa thành công ${selectedRowKeys.length} sinh viên`);
+      setSelectedRowKeys([]);
+      loadStudents();
+    } catch (error) {
+      message.error('Có lỗi xảy ra khi xóa nhiều sinh viên');
+    } finally {
+      setLoading(false);
     }
-
-    const dataToExport = filteredStudents.map(student => ({
-      ...student,
-      ClassRoleID: student.ClassRoleID === 1 ? 'Lớp trưởng' : 'Sinh viên'
-    }));
-
-    const columnMapping = {
-      StudentID: 'MSSV',
-      FirstName: 'Họ và tên đệm',
-      LastName: 'Tên',
-      ClassStudentID: 'Lớp',
-      BirthDay: 'Ngày sinh',
-      Gender: 'Giới tính',
-      ClassRoleID: 'Chức vụ',
-      BirthPlace: 'Nơi sinh',
-      PermanentResidence: 'Thường trú'
-    };
-
-    const fileName = selectedClass === 'all' ? 'Danh_sach_sinh_vien_Toan_Khoa' : `Danh_sach_sinh_vien_${selectedClass}`;
-    exportToExcel(dataToExport, columnMapping, fileName);
-    message.success('Đã tải xuống file Excel!');
   };
 
-  const showStudentDetails = (student: Student) => {
-    setSelectedStudent(student);
-    setIsModalVisible(true);
+  // Tính năng soạn Email qua Gmail Web có kèm Chữ ký (Footer)
+  const handleComposeEmail = () => {
+    if (selectedRowKeys.length === 0) return;
+
+    // 1. Tạo mảng email từ MSSV đã chọn
+    const emails = selectedRowKeys.map(id => `${id}@dlu.edu.vn`);
+    const bccList = emails.join(',');
+
+    // 2. Thiết lập nội dung Chữ ký (Footer) mặc định
+    // Bạn có thể tùy chỉnh lại thông tin bên dưới sao cho phù hợp
+    const emailFooter = `
+
+
+------------------------------------------------------
+Phòng Công tác Sinh viên (CTSV)
+Trường Đại học Đà Lạt (DLU)
+Địa chỉ: 01 Phù Đổng Thiên Vương, Phường 8, TP. Đà Lạt
+Email: ctsv@dlu.edu.vn
+Điện thoại: 02633.xxx.xxx`;
+
+    // 3. Mã hóa nội dung để truyền qua URL (Giữ nguyên được dấu xuống dòng)
+    const encodedBody = encodeURIComponent(emailFooter);
+
+    // 4. Tạo URL mở thẳng giao diện soạn thư của Gmail Web (Thêm tham số &body)
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&bcc=${bccList}&body=${encodedBody}`;
+    
+    // 5. Mở trang Gmail trong tab mới
+    window.open(gmailUrl, '_blank');
   };
 
   const columns = [
     { title: 'MSSV', dataIndex: 'StudentID', key: 'StudentID', width: '12%', sorter: (a: Student, b: Student) => a.StudentID.localeCompare(b.StudentID) },
     { title: 'Họ và tên', key: 'FullName', sorter: (a: Student, b: Student) => a.FirstName.localeCompare(b.FirstName), render: (_: unknown, record: Student) => `${record.FirstName} ${record.LastName}` },
-    { title: 'Lớp', dataIndex: 'ClassStudentID', key: 'ClassStudentID', width: '12%', sorter: (a: Student, b: Student) => a.ClassStudentID.localeCompare(b.ClassStudentID) },
+    { title: 'Lớp', dataIndex: 'ClassStudentID', key: 'ClassStudentID', width: '12%' },
     { title: 'Ngày sinh', dataIndex: 'BirthDay', key: 'BirthDay', width: '15%' },
     { title: 'Giới tính', dataIndex: 'Gender', key: 'Gender', width: '10%', render: (gender: string) => <Tag color={gender === 'Nam' ? 'blue' : 'magenta'}>{gender}</Tag> },
     { title: 'Chức vụ', dataIndex: 'ClassRoleID', key: 'ClassRoleID', width: '15%', render: (role: number) => <Tag color={role === 1 ? 'gold' : 'default'}>{role === 1 ? 'Lớp trưởng' : 'Sinh viên'}</Tag> },
     { title: 'Thao tác', key: 'action', width: '15%', 
       render: (_: unknown, record: Student) => (
         <Space size="small">
-          <Button type="link" style={{ color: '#237804', padding: 0 }} onClick={() => showStudentDetails(record)}>Chi tiết</Button>
+          <Button type="link" style={{ color: '#237804', padding: 0 }} onClick={() => {setSelectedStudent(record); setIsModalVisible(true)}}>Chi tiết</Button>
           <Button type="link" icon={<EditOutlined />} onClick={() => openEditStudent(record)} style={{ padding: 0 }} />
-          <Popconfirm title="Xóa sinh viên này?" onConfirm={() => handleDeleteStudent(record.StudentID)}>
-            <Button type="link" danger icon={<DeleteOutlined />} style={{ padding: 0 }} />
-          </Popconfirm>
         </Space>
       ) }
   ];
 
   return (
     <div>
-      <Card style={{ marginBottom: '20px', borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
-        <Space size="middle" wrap>
-          <Input placeholder="Tìm kiếm theo MSSV hoặc Tên..." prefix={<SearchOutlined />} style={{ width: 300 }} value={searchText} onChange={(e) => setSearchText(e.target.value)} />
-          <Select value={selectedClass} onChange={setSelectedClass} style={{ width: 150 }}>
-            <Option value="all">Tất cả các lớp</Option>
-            <Option value="ITK46A">ITK46A</Option>
-            <Option value="ITK46B">ITK46B</Option>
-            <Option value="ITK47A">ITK47A</Option>
-            <Option value="ITK47B">ITK47B</Option>
-            <Option value="ITK47C">ITK47C</Option>
-            <Option value="ITK48A">ITK48A</Option>
-            <Option value="ITK48B">ITK48B</Option>
-            <Option value="ITK49A">ITK49A</Option>
-            <Option value="ITK49B">ITK49B</Option>
-            <Option value="ITK49C">ITK49C</Option>
-          </Select>
-          <Button type="primary" icon={<SyncOutlined />} loading={loading} onClick={handleSync}>
-            Đồng bộ
-          </Button>
-          <Button icon={<DownloadOutlined />} onClick={handleExportExcel}>
-            Xuất Excel
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAddStudent}>
-            Thêm SV
-          </Button>
-        </Space>
-      </Card>
+      <Space style={{ marginBottom: 16 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAddStudent}>Thêm Sinh Viên</Button>
+        
+        {/* 🔥 Hiện nút Gửi Email và Xóa khi có item được tick */}
+        {selectedRowKeys.length > 0 && (
+          <Space>
+            <Button 
+              icon={<MailOutlined />} 
+              onClick={handleComposeEmail}
+              style={{ backgroundColor: '#eab308', color: '#fff', borderColor: '#eab308' }}
+            >
+              Gửi Email ({selectedRowKeys.length})
+            </Button>
+            
+            <Popconfirm title={`Bạn chắc chắn muốn xóa ${selectedRowKeys.length} sinh viên đã chọn?`} onConfirm={handleDeleteMultiple}>
+              <Button danger icon={<DeleteOutlined />}>Xóa mục đã chọn</Button>
+            </Popconfirm>
+          </Space>
+        )}
+      </Space>
 
-      <Card style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
-        <Table columns={columns} dataSource={filteredStudents} rowKey="StudentID" loading={loading} pagination={{ pageSize: 10 }} />
-      </Card>
+      <Table 
+        rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }} 
+        columns={columns} 
+        dataSource={filteredStudents} 
+        rowKey="StudentID" 
+        loading={loading} 
+        pagination={{
+    defaultPageSize: 10,
+    showSizeChanger: true,
+    pageSizeOptions: ['10', '20', '50', '100'],
+    showTotal: (total, range) => `${range[0]}-${range[1]} của ${total} bản ghi`,
+  }}/>
 
       <Modal title={<div style={{ fontSize: '18px', color: '#237804', marginBottom: '16px' }}>Hồ sơ sinh viên</div>} open={isModalVisible} onCancel={() => setIsModalVisible(false)} footer={[<Button key="close" onClick={() => setIsModalVisible(false)}>Đóng</Button>]} width={700}>
         {selectedStudent && (
@@ -230,25 +244,6 @@ const StudentList: React.FC = () => {
         )}
       </Modal>
 
-      <Divider>Thông tin bổ sung</Divider>
-          
-          <Form.Item name="study_program" label="Chương trình đào tạo">
-            <Select placeholder="Chọn chương trình đào tạo" options={[
-              { value: 'CQ23CT-PM', label: 'CQ23CT-PM (Công nghệ phần mềm)' },
-              { value: 'CQ23CT-MM', label: 'CQ23CT-MMT (Mạng máy tính)' },
-            ]} />
-          </Form.Item>
-
-          <Space style={{ display: 'flex', gap: '24px' }}>
-            <Form.Item name="birth_place" label="Nơi sinh (Tỉnh/Thành phố)" style={{ width: '250px' }}>
-              <Input placeholder="VD: Thành phố Hồ Chí Minh" />
-            </Form.Item>
-
-            <Form.Item name="permanent_residence" label="Thường trú" style={{ width: '380px' }}>
-              <Input placeholder="VD: Tổ 3 Măng Line, Phường 7, Đà Lạt..." />
-            </Form.Item>
-          </Space>
-
       <Modal title={editingStudentId ? "Sửa Sinh viên" : "Thêm Sinh viên"} open={isFormVisible} onCancel={() => setIsFormVisible(false)} onOk={() => form.submit()} width={600} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSaveStudent}>
           <Space style={{ display: 'flex', gap: '16px' }}>
@@ -262,19 +257,15 @@ const StudentList: React.FC = () => {
             <Form.Item name="BirthDay" label="Ngày sinh" style={{ width: '200px' }}><Input placeholder="DD/MM/YYYY" /></Form.Item>
           </Space>
           <Form.Item name="ClassRoleID" label="Chức vụ" style={{ width: '150px' }}><Select options={[{value: 0, label: 'Sinh viên'}, {value: 1, label: 'Lớp trưởng'}]} /></Form.Item>
+          <Divider>Thông tin bổ sung</Divider>
           <Space style={{ display: 'flex', gap: '24px' }}>
             <Form.Item name="study_program" label="Chương trình ĐT">
-              <Select placeholder="Chọn chương trình" style={{ width: '200px' }} options={[
-                { value: 'CQ23CT-PM', label: 'CQ23CT-PM' },
-                { value: 'CQ23CT-MMT', label: 'CQ23CT-MMT' },
-              ]} />
+              <Select placeholder="Chọn chương trình" style={{ width: '200px' }} options={[{ value: 'CQ23CT-PM', label: 'CQ23CT-PM' }, { value: 'CQ23CT-MMT', label: 'CQ23CT-MMT' }]} />
             </Form.Item>
-
             <Form.Item name="birth_place" label="Nơi sinh">
               <Input placeholder="VD: Lâm Đồng" style={{ width: '200px' }} />
             </Form.Item>
           </Space>
-
           <Form.Item name="permanent_residence" label="Thường trú">
             <Input placeholder="VD: Phường 8, TP. Đà Lạt, Lâm Đồng" />
           </Form.Item>
@@ -285,23 +276,34 @@ const StudentList: React.FC = () => {
 };
 
 // --- COMPONENT: QUẢN LÝ GIẢNG VIÊN ---
-const TeacherList: React.FC = () => {
+interface TeacherListProps {
+  searchText: string;
+}
+
+const TeacherList: React.FC<TeacherListProps> = ({ searchText }) => {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form] = Form.useForm();
 
   const loadTeachers = useCallback(async () => {
+    setLoading(true);
     const res = await getTeachers();
     if (res.success) setTeachers(res.data);
+    setLoading(false);
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-    const fetchData = async () => { if (isMounted) await loadTeachers(); };
-    fetchData();
-    return () => { isMounted = false; };
-  }, [loadTeachers]);
+  useEffect(() => { loadTeachers(); }, [loadTeachers]);
+
+  const filteredTeachers = useMemo(() => {
+    return teachers.filter(t => 
+      t.full_name.toLowerCase().includes(searchText.toLowerCase()) ||
+      t.email.toLowerCase().includes(searchText.toLowerCase())
+    );
+  }, [teachers, searchText]);
 
   const openAddForm = () => { setEditingId(null); form.resetFields(); setIsModalVisible(true); };
   const openEditForm = (record: Teacher) => { setEditingId(record.id); form.setFieldsValue(record); setIsModalVisible(true); };
@@ -315,10 +317,19 @@ const TeacherList: React.FC = () => {
     } else message.error('Lỗi khi lưu thông tin');
   };
 
-  const handleDelete = async (id: number) => {
-    const res = await deleteTeacher(id);
-    if (res.success) { message.success('Xóa thành công!'); loadTeachers(); }
-    else message.error('Lỗi khi xóa');
+  const handleDeleteMultiple = async () => {
+    if (selectedRowKeys.length === 0) return;
+    setLoading(true);
+    try {
+      await Promise.all(selectedRowKeys.map(id => deleteTeacher(id as number)));
+      message.success(`Đã xóa thành công ${selectedRowKeys.length} giảng viên`);
+      setSelectedRowKeys([]);
+      loadTeachers();
+    } catch (error) {
+      message.error('Có lỗi xảy ra khi xóa giảng viên');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const columns = [
@@ -330,9 +341,6 @@ const TeacherList: React.FC = () => {
       render: (_: unknown, record: Teacher) => (
         <Space size="middle">
           <Button type="link" icon={<EditOutlined />} onClick={() => openEditForm(record)} />
-          <Popconfirm title="Bạn có chắc chắn muốn xóa?" onConfirm={() => handleDelete(record.id)}>
-            <Button type="link" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
         </Space>
       )
     }
@@ -340,8 +348,28 @@ const TeacherList: React.FC = () => {
 
   return (
     <div>
-      <Button type="primary" icon={<PlusOutlined />} onClick={openAddForm} style={{ marginBottom: 16 }}>Thêm Giảng viên</Button>
-      <Table columns={columns} dataSource={teachers} rowKey="id" pagination={{ pageSize: 10 }} />
+      <Space style={{ marginBottom: 16 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAddForm}>Thêm Giảng viên</Button>
+        {selectedRowKeys.length > 0 && (
+          <Popconfirm title={`Xóa ${selectedRowKeys.length} giảng viên đã chọn?`} onConfirm={handleDeleteMultiple}>
+            <Button danger icon={<DeleteOutlined />}>Xóa mục đã chọn</Button>
+          </Popconfirm>
+        )}
+      </Space>
+
+      <Table 
+        rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
+        columns={columns} 
+        dataSource={filteredTeachers} 
+        rowKey="id" 
+        loading={loading}
+        pagination={{
+    defaultPageSize: 10,
+    showSizeChanger: true,
+    pageSizeOptions: ['10', '20', '50', '100'],
+    showTotal: (total, range) => `${range[0]}-${range[1]} của ${total} bản ghi`,
+  }} />
+
       <Modal title={editingId ? "Sửa Giảng viên" : "Thêm Giảng viên mới"} open={isModalVisible} onCancel={() => setIsModalVisible(false)} onOk={() => form.submit()} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSave}>
           <Form.Item name="full_name" label="Họ và tên" rules={[{ required: true }]}><Input /></Form.Item>
@@ -353,25 +381,35 @@ const TeacherList: React.FC = () => {
   );
 };
 
-const ClassManagement: React.FC = () => {
+// --- COMPONENT: QUẢN LÝ LỚP HỌC ---
+interface ClassManagementProps {
+  searchText: string;
+}
+
+const ClassManagement: React.FC<ClassManagementProps> = ({ searchText }) => {
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [editingCode, setEditingCode] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const loadData = useCallback(async () => {
+    setLoading(true);
     const [resClasses, resTeachers] = await Promise.all([getClasses(), getTeachers()]);
     if (resClasses.success) setClasses(resClasses.data);
     if (resTeachers.success) setTeachers(resTeachers.data);
+    setLoading(false);
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-    const fetchData = async () => { if (isMounted) await loadData(); };
-    fetchData();
-    return () => { isMounted = false; };
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
+
+  const filteredClasses = useMemo(() => {
+    return classes.filter(c => 
+      c.class_code.toLowerCase().includes(searchText.toLowerCase()) ||
+      c.class_name.toLowerCase().includes(searchText.toLowerCase())
+    );
+  }, [classes, searchText]);
 
   const handleAssign = async (classCode: string, teacherId: number) => {
     const res = await assignTeacherToClass(classCode, teacherId);
@@ -393,7 +431,6 @@ const ClassManagement: React.FC = () => {
   const handleDelete = async (classCode: string) => {
     const res = await deleteClass(classCode);
     if (res.success) { message.success('Xóa thành công!'); loadData(); }
-    else message.error('Lỗi khi xóa');
   };
 
   const columns = [
@@ -426,7 +463,7 @@ const ClassManagement: React.FC = () => {
   return (
     <div>
       <Button type="primary" icon={<PlusOutlined />} onClick={openAddForm} style={{ marginBottom: 16 }}>Thêm Lớp học</Button>
-      <Table columns={columns} dataSource={classes} rowKey="class_code" pagination={false} />
+      <Table columns={columns} dataSource={filteredClasses} rowKey="class_code" loading={loading} pagination={false} />
       <Modal title={editingCode ? "Sửa Lớp học" : "Thêm Lớp học mới"} open={isModalVisible} onCancel={() => setIsModalVisible(false)} onOk={() => form.submit()} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSave}>
           <Form.Item name="class_code" label="Mã lớp (VD: ITK47A)" rules={[{ required: true }]}><Input disabled={!!editingCode} /></Form.Item>
@@ -437,30 +474,119 @@ const ClassManagement: React.FC = () => {
   );
 };
 
-// 2. Component bọc ngoài cùng chứa các Tab (Tab 2 và Tab 3 đang là Placeholder để code sau)
+// --- COMPONENT CHÍNH QUẢN LÝ BAO QUÁT ---
 const AcademicManagement: React.FC = () => {
-  const tabItems = [
-    {
-      key: '1',
-      label: 'Danh sách Sinh viên',
-      children: <StudentList />,
-    },
-    {
-      key: '2',
-      label: 'Giảng viên Chủ nhiệm',
-      children: <TeacherList />,
-    },
-    {
-      key: '3',
-      label: 'Quản lý Lớp học',
-      children: <ClassManagement />,
+  const [activeTab, setActiveTab] = useState<string>('1');
+  const [searchText, setSearchText] = useState<string>('');
+  const [selectedClass, setSelectedClass] = useState<string>('all');
+  const [isSyncing, setIsSyncing] = useState(false);
+  
+  // Hàm trigger xuất Excel được truyền từ component con lên
+  const [triggerExport, setTriggerExport] = useState<(() => void) | null>(null);
+
+  const handleSync = async () => {
+    if (activeTab === '1') {
+      if (selectedClass === 'all') {
+        message.warning('Vui lòng chọn một lớp cụ thể để đồng bộ sinh viên!');
+        return;
+      }
+      setIsSyncing(true);
+      try {
+        const res = await syncStudentsByClass(selectedClass);
+        if (res.success) {
+          message.success(`Đồng bộ thành công ${res.data.length} sinh viên lớp ${selectedClass}`);
+          // Bạn có thể kích hoạt reload data tại đây nếu dùng Redux/Context, 
+          // Hoặc thiết kế thêm 1 flag refresh data truyền xuống con.
+        } else {
+          message.error(res.message || 'Lỗi đồng bộ dữ liệu');
+        }
+      } catch (error) {
+        message.error('Không thể kết nối đến máy chủ');
+      } finally {
+        setIsSyncing(false);
+      }
+    } else {
+      message.info('Tính năng đồng bộ hiện chỉ hỗ trợ cho Danh sách Sinh viên.');
     }
-  ];
+  };
 
   return (
-    <div>
-      <h2 style={{ marginBottom: '20px' }}>Quản lý Đào tạo</h2>
-      <Tabs defaultActiveKey="1" items={tabItems} />
+    <div style={{ background: '#fff', padding: '24px', borderRadius: '8px', minHeight: '80vh' }}>
+      
+      {/* --- THANH CÔNG CỤ DÙNG CHUNG (TỐI TÂN) --- */}
+      <Card style={{ marginBottom: '20px', background: '#f8f9fa' }} bodyStyle={{ padding: '16px' }}>
+        <Space size="middle" wrap style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+          
+          <Space>
+            <Input 
+              placeholder={
+                activeTab === '1' ? "Tìm kiếm MSSV, Tên sinh viên..." : 
+                activeTab === '2' ? "Tìm kiếm Giảng viên, Email..." : 
+                "Tìm kiếm Mã lớp, Tên lớp..."
+              }
+              prefix={<SearchOutlined />} 
+              style={{ width: 350, borderRadius: '6px' }} 
+              value={searchText} 
+              onChange={(e) => setSearchText(e.target.value)} 
+              allowClear
+            />
+            
+            {/* Bộ lọc Lớp - Chỉ hiện khi ở Tab Sinh Viên */}
+            {activeTab === '1' && (
+              <Select value={selectedClass} onChange={setSelectedClass} style={{ width: 150 }}>
+                <Option value="all">Tất cả lớp</Option>
+                <Option value="ITK46A">ITK46A</Option>
+                <Option value="ITK46B">ITK46B</Option>
+                <Option value="ITK47A">ITK47A</Option>
+                <Option value="ITK47B">ITK47B</Option>
+                <Option value="ITK47C">ITK47C</Option>
+                <Option value="ITK48A">ITK48A</Option>
+                <Option value="ITK48B">ITK48B</Option>
+                <Option value="ITK49A">ITK49A</Option>
+                <Option value="ITK49B">ITK49B</Option>
+                <Option value="ITK49C">ITK49C</Option>
+              </Select>
+            )}
+          </Space>
+
+          <Space>
+            {activeTab === '1' && (
+              <Button type="primary" icon={<SyncOutlined />} loading={isSyncing} onClick={handleSync}>
+                Đồng bộ
+              </Button>
+            )}
+            {activeTab === '1' && (
+              <Button icon={<DownloadOutlined />} onClick={() => triggerExport && triggerExport()}>
+                Xuất Excel
+              </Button>
+            )}
+          </Space>
+
+        </Space>
+      </Card>
+
+      {/* --- CÁC TAB CHỨA NỘI DUNG CHÍNH --- */}
+      <Tabs 
+        activeKey={activeTab} 
+        onChange={setActiveTab}
+        items={[
+          { 
+            key: '1', 
+            label: 'Danh sách Sinh viên', 
+            children: <StudentList searchText={searchText} selectedClass={selectedClass} onExportAction={setTriggerExport} /> 
+          },
+          { 
+            key: '2', 
+            label: 'Giảng viên Chủ nhiệm', 
+            children: <TeacherList searchText={searchText} /> 
+          },
+          { 
+            key: '3', 
+            label: 'Quản lý Lớp học', 
+            children: <ClassManagement searchText={searchText} /> 
+          }
+        ]} 
+      />
     </div>
   );
 };
