@@ -428,6 +428,79 @@ app.post('/api/tasks/:taskId/send', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
+// === PHÂN CÔNG SINH VIÊN (tái dùng bảng task_assignments) ===
+// Quy ước status: Được phân công (mặc định) → Đã xác nhận → Đã tham gia / Vắng
+const PARTICIPANT_STATUSES = ['Được phân công', 'Đã xác nhận', 'Đã tham gia', 'Vắng'];
+
+// Lấy danh sách SV được phân công của 1 công việc (kèm tên/lớp từ bảng students)
+app.get('/api/tasks/:taskId/participants', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ta.id, ta.task_id, ta.student_id, ta.class_code, ta.status, ta.note, ta.created_at,
+              s.first_name AS "FirstName", s.last_name AS "LastName", s.class_id AS "ClassStudentID",
+              s.gender AS "Gender", s.role_id AS "ClassRoleID"
+       FROM task_assignments ta
+       LEFT JOIN students s ON s.student_id = ta.student_id
+       WHERE ta.task_id = $1
+       ORDER BY ta.class_code, ta.student_id`,
+      [req.params.taskId]
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// Thêm hàng loạt SV vào 1 công việc (idempotent nhờ UNIQUE(task_id, student_id))
+app.post('/api/tasks/:taskId/participants', async (req, res) => {
+  const { student_ids } = req.body;
+  if (!Array.isArray(student_ids) || student_ids.length === 0) {
+    return res.status(400).json({ success: false, message: 'student_ids phải là mảng MSSV không rỗng' });
+  }
+  try {
+    const taskId = req.params.taskId;
+    const ids = [...new Set(student_ids.map(String))];
+    // Lấy class_code từ bảng students để khỏi bắt client gửi kèm
+    const stRes = await pool.query('SELECT student_id, class_id FROM students WHERE student_id = ANY($1)', [ids]);
+    const classById = Object.fromEntries(stRes.rows.map(r => [r.student_id, r.class_id]));
+    const rows = [];
+    for (const sid of ids) {
+      const result = await pool.query(
+        `INSERT INTO task_assignments (task_id, student_id, class_code, status)
+         VALUES ($1, $2, $3, 'Được phân công')
+         ON CONFLICT (task_id, student_id) DO NOTHING
+         RETURNING *`,
+        [taskId, sid, classById[sid] || null]
+      );
+      if (result.rows[0]) rows.push(result.rows[0]);
+    }
+    res.json({ success: true, data: rows, added: rows.length, skipped: ids.length - rows.length });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// Cập nhật trạng thái / ghi chú phân công (điểm danh sau sự kiện)
+app.patch('/api/participants/:id', async (req, res) => {
+  const { status, note } = req.body;
+  if (status !== undefined && !PARTICIPANT_STATUSES.includes(status)) {
+    return res.status(400).json({ success: false, message: `status phải thuộc: ${PARTICIPANT_STATUSES.join(', ')}` });
+  }
+  try {
+    const result = await pool.query(
+      `UPDATE task_assignments
+       SET status = COALESCE($1, status), note = COALESCE($2, note)
+       WHERE id = $3 RETURNING *`,
+      [status || null, note !== undefined ? note : null, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy phân công' });
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.delete('/api/participants/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM task_assignments WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
 
 
 const PORT = process.env.PORT || 5000;

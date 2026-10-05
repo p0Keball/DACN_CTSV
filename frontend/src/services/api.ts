@@ -56,4 +56,10 @@ export const deleteRecipient = async (id: number) => (await axios.delete(`${API_
 export const getTaskHistory = async (taskId: number) => (await axios.get(`${API_BASE_URL}/tasks/${taskId}/history`)).data;
 export const sendTaskEmail = async (taskId: number, send_type?: string) => (await axios.post(`${API_BASE_URL}/tasks/${taskId}/send`, { send_type })).data;
 
+// Phân công sinh viên (tái dùng bảng task_assignments — Gói 4)
+export const getTaskParticipants = async (taskId: number) => (await axios.get(`${API_BASE_URL}/tasks/${taskId}/participants`)).data;
+export const addTaskParticipants = async (taskId: number, student_ids: string[]) => (await axios.post(`${API_BASE_URL}/tasks/${taskId}/participants`, { student_ids })).data;
+export const updateParticipant = async (id: number, data: object) => (await axios.patch(`${API_BASE_URL}/participants/${id}`, data)).data;
+export const deleteParticipant = async (id: number) => (await axios.delete(`${API_BASE_URL}/participants/${id}`)).data;
+
 

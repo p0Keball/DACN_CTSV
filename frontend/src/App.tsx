@@ -1,13 +1,49 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import { Layout, ConfigProvider } from 'antd';
-// Đã xóa import Sidebar
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
 import Students from './pages/Students';
-import Tasks from './pages/Tasks';
+import TasksWorkspace from './pages/TasksWorkspace';
+import TaskCompose from './pages/TaskCompose';
 
 const { Content } = Layout;
+
+// Mục Công việc dùng full-width (tối đa ~1600px): vừa cho bảng danh sách,
+// vừa cho trang Soạn 2 cột thấy tổng thể; các trang còn lại giữ 1200px.
+const isWidePath = (pathname: string) =>
+  pathname === '/cong-viec' ||
+  pathname === '/cong-viec/moi' ||
+  /\/cong-viec\/\d+\/sua$/.test(pathname);
+
+const PageContent: React.FC = () => {
+  const location = useLocation();
+  const wide = isWidePath(location.pathname);
+  // Workspace Công việc mount thường trực (Gói 2d): sang mục khác chỉ ẩn CSS,
+  // tab soạn + nháp không mất. Route /cong-viec chỉ giữ chỗ.
+  const onTasks = location.pathname === '/cong-viec';
+  return (
+    <Content style={{
+      padding: '24px',
+      background: '#f4f7fb',
+      display: 'flex',
+      justifyContent: 'center'
+    }}>
+      <div style={{ width: '100%', maxWidth: wide ? '1600px' : '1200px' }}>
+        <div style={{ display: onTasks ? 'block' : 'none' }}>
+          <TasksWorkspace active={onTasks} />
+        </div>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/sinh-vien" element={<Students />} />
+          <Route path="/cong-viec" element={<></>} />
+          <Route path="/cong-viec/moi" element={<TaskCompose />} />
+          <Route path="/cong-viec/:id/sua" element={<TaskCompose />} />
+        </Routes>
+      </div>
+    </Content>
+  );
+};
 
 const App: React.FC = () => {
   return (
@@ -16,28 +52,11 @@ const App: React.FC = () => {
       <Router>
         {/* Layout tổng không còn Sidebar nên không cần Layout lồng nhau hay marginLeft */}
         <Layout style={{ minHeight: '100vh', background: '#f4f7fb' }}>
-          
+
           {/* Header đã được cấu hình position: sticky bên trong component */}
           <Header />
-          
-          {/* Content được dùng Flexbox để luôn căn giữa màn hình */}
-          <Content style={{ 
-            padding: '24px', 
-            background: '#f4f7fb',
-            display: 'flex', 
-            justifyContent: 'center' 
-          }}>
-            
-            {/* Box chứa nội dung chính giới hạn chiều rộng max-width */}
-            <div style={{ width: '100%', maxWidth: '1200px' }}>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/sinh-vien" element={<Students />} />
-                <Route path="/cong-viec" element={<Tasks />} />
-              </Routes>
-            </div>
 
-          </Content>
+          <PageContent />
         </Layout>
       </Router>
     </ConfigProvider>

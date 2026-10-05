@@ -1,0 +1,149 @@
+/* Layout 3 cột cho trang Soạn công việc: trái (Nguồn & Loại) | giữa (soạn chính) | phải (Thiết lập + File) */
+.tc-grid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+.tc-source {
+  position: sticky;
+  top: 76px;
+  min-width: 0;
+}
+
+.tc-source-fields {
+  display: flex;
+  flex-direction: column;
+}
+
+.tc-side {
+  position: sticky;
+  top: 76px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.tc-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Ô nội dung soạn email mở rộng */
+.tc-content-textarea textarea {
+  min-height: 380px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* TipTap rich text editor (Gói 3) */
+.tc-tiptap-wrap {
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.tc-tiptap-wrap:hover {
+  border-color: #237804;
+}
+
+.tc-tiptap-wrap:focus-within {
+  border-color: #237804;
+  box-shadow: 0 0 0 2px rgba(35, 120, 4, 0.15);
+}
+
+.tc-tiptap-toolbar {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fafafa;
+  flex-wrap: wrap;
+}
+
+.tc-tiptap {
+  min-height: 340px;
+  padding: 12px 14px;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.tc-tiptap p {
+  margin: 0 0 8px;
+}
+
+.tc-tiptap ul,
+.tc-tiptap ol {
+  padding-left: 22px;
+  margin: 0 0 8px;
+}
+
+.tc-tiptap a {
+  color: #237804;
+}
+
+/* Khung kéo-thả gọn trong cột phải */
+.tc-side .ant-upload-drag {
+  padding: 12px 8px;
+}
+
+.tc-side .ant-upload-drag .ant-upload-drag-icon {
+  margin-bottom: 4px;
+}
+
+.tc-side .ant-upload-drag .ant-upload-drag-icon .anticon {
+  font-size: 28px;
+}
+
+/* Card gọn, hiện đại */
+.tc-card {
+  border-radius: 10px;
+}
+
+.tc-card .ant-card-head {
+  min-height: 44px;
+  font-size: 14px;
+}
+
+@media (max-width: 1400px) {
+  .tc-grid {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+
+  /* Cột trái tràn full-width lên trên, 2 ô xếp ngang */
+  .tc-source {
+    position: static;
+    grid-column: 1 / -1;
+  }
+
+  .tc-source-fields {
+    flex-direction: row;
+    gap: 16px;
+  }
+
+  .tc-source-fields > .ant-form-item {
+    flex: 1;
+    margin-bottom: 0;
+  }
+}
+
+@media (max-width: 1100px) {
+  .tc-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tc-side {
+    position: static;
+  }
+
+  .tc-content-textarea textarea {
+    min-height: 280px;
+  }
+}

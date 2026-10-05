@@ -11,9 +11,12 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.4",
+    "@tiptap/react": "^3.31.4",
+    "@tiptap/starter-kit": "^3.31.4",
     "antd": "^6.6.4",
     "axios": "^1.20.0",
     "dayjs": "^1.11.13",
+    "dompurify": "^3.4.16",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.4",
@@ -22,6 +25,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/dompurify": "^3.0.5",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
