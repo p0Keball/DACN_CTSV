@@ -6,6 +6,8 @@ import Dashboard from './pages/Dashboard';
 import Students from './pages/Students';
 import TasksWorkspace from './pages/TasksWorkspace';
 import TaskCompose from './pages/TaskCompose';
+import ReportsPage from './pages/ReportsPage';
+import RecordsPage from './pages/RecordsPage';
 
 const { Content } = Layout;
 
@@ -14,6 +16,8 @@ const { Content } = Layout;
 const isWidePath = (pathname: string) =>
   pathname === '/cong-viec' ||
   pathname === '/cong-viec/moi' ||
+  pathname === '/bao-cao' ||
+  pathname === '/ho-so' ||
   /\/cong-viec\/\d+\/sua$/.test(pathname);
 
 const PageContent: React.FC = () => {
@@ -39,6 +43,8 @@ const PageContent: React.FC = () => {
           <Route path="/cong-viec" element={<></>} />
           <Route path="/cong-viec/moi" element={<TaskCompose />} />
           <Route path="/cong-viec/:id/sua" element={<TaskCompose />} />
+          <Route path="/bao-cao" element={<ReportsPage />} />
+          <Route path="/ho-so" element={<RecordsPage />} />
         </Routes>
       </div>
     </Content>

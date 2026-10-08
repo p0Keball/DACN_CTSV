@@ -25,6 +25,7 @@ export interface Recipient {
   recipient_email: string;
   recipient_name?: string;
   recipient_group?: string;
+  kind?: string; // 'to' (mặc định) | 'cc' — cụm Cc ban lãnh đạo
 }
 
 export interface Attachment {

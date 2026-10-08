@@ -62,4 +62,22 @@ export const addTaskParticipants = async (taskId: number, student_ids: string[])
 export const updateParticipant = async (id: number, data: object) => (await axios.patch(`${API_BASE_URL}/participants/${id}`, data)).data;
 export const deleteParticipant = async (id: number) => (await axios.delete(`${API_BASE_URL}/participants/${id}`)).data;
 
+// Báo cáo tổng hợp (Gói 6, chỉ đọc)
+export const getTaskReport = async (params: { group?: string; from?: string; to?: string }) =>
+  (await axios.get(`${API_BASE_URL}/reports/tasks`, { params })).data;
+export const getSemesters = async () => (await axios.get(`${API_BASE_URL}/reports/semesters`)).data;
+export const getParticipation = async (semester?: string) =>
+  (await axios.get(`${API_BASE_URL}/reports/participation`, { params: semester ? { semester } : {} })).data;
+
+// Tủ hồ sơ (tab Hồ sơ): file gom theo tháng tạo công việc
+export const getFilesLibrary = async () => (await axios.get(`${API_BASE_URL}/files/library`)).data;
+export const searchFiles = async (params: { q?: string; type?: string; source?: string }) =>
+  (await axios.get(`${API_BASE_URL}/files/search`, { params })).data;
+
+// Danh bạ CC ban lãnh đạo (cụm Cc)
+export const getCcContacts = async () => (await axios.get(`${API_BASE_URL}/cc-contacts`)).data;
+export const addCcContact = async (data: object) => (await axios.post(`${API_BASE_URL}/cc-contacts`, data)).data;
+export const updateCcContact = async (id: number, data: object) => (await axios.put(`${API_BASE_URL}/cc-contacts/${id}`, data)).data;
+export const deleteCcContact = async (id: number) => (await axios.delete(`${API_BASE_URL}/cc-contacts/${id}`)).data;
+
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Button, Space, Card, Form, Input, InputNumber, Select, DatePicker, message, Tag, Upload, Alert, Spin, Table, Modal } from 'antd';
+import { Button, Space, Card, Form, Input, InputNumber, Select, DatePicker, message, notification, Tag, Upload, Alert, Spin, Table, Modal } from 'antd';
 import { SendOutlined, SaveOutlined, ArrowLeftOutlined, InboxOutlined, LinkOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import dayjs from 'dayjs';
@@ -8,10 +8,13 @@ import {
   getTasks, getStudents, addTask, updateTask, addTaskAttachmentLink, uploadTaskFiles,
   getTaskRecipients, addTaskRecipient, deleteRecipient, sendTaskEmail, getClasses, getTeachers,
   getTaskParticipants, addTaskParticipants, deleteParticipant,
+  addTeacher, updateTeacher, deleteTeacher, addClass, updateClass, deleteClass,
+  getCcContacts, addCcContact, updateCcContact, deleteCcContact,
 } from '../services/api';
 import { STATUS_OPTIONS, TASK_TYPE_OPTIONS } from '../types';
 import type { Recipient } from '../types';
 import EmailEditor from '../components/EmailEditor';
+import DirectoryModal from '../components/DirectoryModal';
 import './TaskCompose.css';
 
 interface TaskComposeProps {
@@ -26,6 +29,29 @@ interface TaskComposeProps {
 }
 
 const { Dragger } = Upload;
+
+// Preset "Tất cả GV + Lớp" — danh sách email khoa (cứng trong code; đổi khi nhân sự đổi)
+const PRESET_GV = [
+  { email: 'conglg@dlu.edu.vn', name: 'Công Lê Gia' },
+  { email: 'hieunt@dlu.edu.vn', name: 'Hiếu Nguyễn Trọng' },
+  { email: 'khuedm@dlu.edu.vn', name: 'Khuê Đoàn Minh' },
+  { email: 'linhttp@dlu.edu.vn', name: 'Linh Trần Thị Phương' },
+  { email: 'anhlt@dlu.edu.vn', name: 'Lê Thiên Anh' },
+  { email: 'ngaptt@dlu.edu.vn', name: 'Nga Phan Thị Thanh' },
+  { email: 'phuctv@dlu.edu.vn', name: 'Phúc Trần Vĩnh' },
+  { email: 'quanvm@dlu.edu.vn', name: 'Quan Vũ Minh' },
+  { email: 'thanglq@dlu.edu.vn', name: 'Thắng La Quốc' },
+  { email: 'dungnvh@dlu.edu.vn', name: 'Dũng Nguyễn Văn Huy' },
+  { email: 'khoadv@dlu.edu.vn', name: 'Khoa Đỗ Văn' },
+  { email: 'quangtn@dlu.edu.vn', name: 'Quang Trần Nhật' },
+];
+const PRESET_LOP = [
+  'ctk49a@dlu.edu.vn', 'ctk49b@dlu.edu.vn', 'ctk49c@dlu.edu.vn',
+  'ctk48a@dlu.edu.vn', 'ctk48b@dlu.edu.vn',
+  'ctk47a@dlu.edu.vn', 'ctk47b@dlu.edu.vn', 'ctk47c@dlu.edu.vn',
+  'ctk50a@dlu.edu.vn', 'ctk50b@dlu.edu.vn',
+  'ctk46a@dlu.edu.vn', 'ctk46b@dlu.edu.vn',
+];
 
 // Trang Soạn công việc (Gói 2b): layout 2 cột — cột trái là luồng soạn chính
 // (Tiêu đề → Nội dung → Người nhận kề nhau), cột phải sticky là Thiết lập + File.
@@ -74,8 +100,14 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
   const [recipDrafts, setRecipDrafts] = useState<Recipient[]>([]);
   const [recipEmail, setRecipEmail] = useState('');
   const [recipName, setRecipName] = useState('');
-  const [classes, setClasses] = useState<Array<{ class_code: string; class_name: string; teacher_id: number | null; teacher_name: string | null }>>([]);
+  const [classes, setClasses] = useState<Array<{ class_code: string; class_name: string; teacher_id: number | null; teacher_name: string | null; email?: string | null }>>([]);
   const [teachers, setTeachers] = useState<Array<{ id: number; full_name: string; email: string }>>([]);
+  const [directoryOpen, setDirectoryOpen] = useState(false);
+
+  // Cụm Cc (ban lãnh đạo): toggle mặc định bật; tắt thì gỡ cả cụm khỏi người nhận
+  const [ccOn, setCcOn] = useState(true);
+  const [ccList, setCcList] = useState<Array<{ id: number; name: string; email: string }>>([]);
+  const ccSeeded = useRef(false);
 
   // Khối Phân công SV (Gói 4): state giữ theo MSSV, không mất khi đổi lớp xem
   const [allStudents, setAllStudents] = useState<StudentRow[]>([]);
@@ -89,7 +121,21 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
     getClasses().then(res => { if (res.success) setClasses(res.data); }).catch(() => undefined);
     getTeachers().then(res => { if (res.success) setTeachers(res.data); }).catch(() => undefined);
     getStudents().then(res => { if (res.success) setAllStudents(res.data); }).catch(() => undefined);
+    getCcContacts().then(res => { if (res.success) setCcList(res.data); }).catch(() => undefined);
   }, []);
+
+  // Soạn mới + toggle CC đang bật: tự đưa cụm Cc vào (im lặng, không toast)
+  useEffect(() => {
+    if (editingId || !ccOn || ccList.length === 0 || ccSeeded.current) return;
+    ccSeeded.current = true;
+    setRecipDrafts(prev => {
+      const existing = new Set(prev.map(r => r.recipient_email.toLowerCase()));
+      const adds = ccList
+        .filter(c => c.email && !existing.has(c.email.toLowerCase()))
+        .map(c => ({ recipient_email: c.email, recipient_name: c.name, recipient_group: 'Ban lãnh đạo', kind: 'cc' }));
+      return [...prev, ...adds];
+    });
+  }, [editingId, ccOn, ccList]);
 
   useEffect(() => {
     if (!editingId) return;
@@ -152,18 +198,151 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
     setRecipName('');
   };
 
-  const addAllGvcn = () => {
-    const withEmail = teachers.filter(t => t.email);
-    if (withEmail.length === 0) { message.warning('Chưa có GVCN nào có email'); return; }
+  // Danh bạ đọc từ DB (GV ← teachers, Lớp ← classes.email); DB trống mới rớt về cứng
+  const classesWithEmail = classes.filter(c => c.email);
+  const usingFallback = teachers.length === 0 && classesWithEmail.length === 0;
+  const dirGv: Array<{ name: string; email: string }> = teachers.length > 0
+    ? teachers.filter(t => t.email).map(t => ({ name: t.full_name, email: t.email }))
+    : PRESET_GV;
+  const dirLop: Array<{ name: string; email: string }> = classesWithEmail.length > 0
+    ? classesWithEmail.map(c => ({ name: `Lớp ${c.class_code}`, email: c.email as string }))
+    : PRESET_LOP.map(email => ({ name: `Lớp ${email.split('@')[0].toUpperCase()}`, email }));
+
+  // Thêm hàng loạt có Hoàn tác (snapshot trước khi thêm)
+  const bulkAdd = (items: Recipient[], label: string) => {
+    const snapshot = recipDrafts;
     setRecipDrafts(prev => {
       const existing = new Set(prev.map(r => r.recipient_email.toLowerCase()));
-      const adds = withEmail
-        .filter(t => !existing.has(t.email.toLowerCase()))
-        .map(t => ({ recipient_email: t.email, recipient_name: t.full_name, recipient_group: 'Toàn thể GVCN' }));
+      const adds = items.filter(it => {
+        const key = it.recipient_email.toLowerCase();
+        if (existing.has(key)) return false;
+        existing.add(key);
+        return true;
+      });
       return [...prev, ...adds];
     });
-    message.success(`Đã thêm ${withEmail.length} GVCN vào người nhận`);
+    notification.success({
+      message: `Đã thêm ${label}`,
+      btn: <Button size="small" onClick={() => { setRecipDrafts(snapshot); notification.destroy(); message.info('Đã hoàn tác'); }}>Hoàn tác</Button>,
+      duration: 6,
+    });
   };
+
+  const addAllGvAndClasses = () => bulkAdd(
+    [
+      ...dirGv.map(g => ({ recipient_email: g.email, recipient_name: g.name, recipient_group: 'GV' })),
+      ...dirLop.map(l => ({ recipient_email: l.email, recipient_name: l.name, recipient_group: 'Lớp' })),
+    ],
+    `Tất cả GV + Lớp (${dirGv.length} GV, ${dirLop.length} lớp)`
+  );
+
+  const addGvOnly = () => bulkAdd(
+    dirGv.map(g => ({ recipient_email: g.email, recipient_name: g.name, recipient_group: 'GV' })),
+    `Giảng viên (${dirGv.length})`
+  );
+
+  const addLopOnly = () => bulkAdd(
+    dirLop.map(l => ({ recipient_email: l.email, recipient_name: l.name, recipient_group: 'Lớp' })),
+    `Lớp (${dirLop.length})`
+  );
+
+  // Ghi danh bạ thẳng vào DB (popup Danh bạ gọi)
+  const dirAddTeacher = async (name: string, email: string) => {
+    try {
+      const res = await addTeacher({ full_name: name, email });
+      if (!res.success) throw new Error();
+      const r = await getTeachers();
+      if (r.success) setTeachers(r.data);
+      message.success('Đã thêm giảng viên vào danh bạ');
+    } catch { message.error('Không thêm được (có thể email đã tồn tại)'); }
+  };
+
+  const dirUpdateTeacher = async (id: number, patch: { full_name?: string; email?: string }) => {
+    try {
+      const res = await updateTeacher(id, patch);
+      if (!res.success) throw new Error();
+      setTeachers(prev => prev.map(t => (t.id === id ? { ...t, ...patch } as typeof t : t)));
+      message.success('Đã cập nhật giảng viên');
+    } catch { message.error('Không cập nhật được'); }
+  };
+
+  const dirDeleteTeacher = async (id: number) => {
+    try {
+      const res = await deleteTeacher(id);
+      if (!res.success) throw new Error();
+      setTeachers(prev => prev.filter(t => t.id !== id));
+      message.success('Đã xóa khỏi danh bạ');
+    } catch { message.error('Không xóa được'); }
+  };
+
+  const dirAddClass = async (code: string, email: string) => {
+    try {
+      const res = await addClass({ class_code: code, email });
+      if (!res.success) throw new Error();
+      const r = await getClasses();
+      if (r.success) setClasses(r.data);
+      message.success('Đã thêm lớp vào danh bạ');
+    } catch { message.error('Không thêm được (có thể mã lớp đã tồn tại)'); }
+  };
+
+  const dirUpdateClassEmail = async (code: string, email: string) => {
+    try {
+      const res = await updateClass(code, { email });
+      if (!res.success) throw new Error();
+      setClasses(prev => prev.map(c => (c.class_code === code ? { ...c, email } : c)));
+      message.success('Đã cập nhật hòm thư lớp');
+    } catch { message.error('Không cập nhật được'); }
+  };
+
+  const dirDeleteClass = async (code: string) => {
+    try {
+      const res = await deleteClass(code);
+      if (!res.success) throw new Error();
+      setClasses(prev => prev.filter(c => c.class_code !== code));
+      message.success('Đã xóa lớp khỏi danh bạ');
+    } catch { message.error('Không xóa được'); }
+  };
+
+  const dirAddCc = async (name: string, email: string) => {
+    try {
+      const res = await addCcContact({ name, email });
+      if (!res.success) throw new Error();
+      const r = await getCcContacts();
+      if (r.success) setCcList(r.data);
+      message.success('Đã thêm vào cụm Cc');
+    } catch { message.error('Không thêm được (có thể email đã tồn tại)'); }
+  };
+
+  const dirUpdateCc = async (id: number, patch: { name?: string; email?: string }) => {
+    try {
+      const res = await updateCcContact(id, patch);
+      if (!res.success) throw new Error();
+      setCcList(prev => prev.map(c => (c.id === id ? { ...c, ...patch } : c)));
+      message.success('Đã cập nhật cụm Cc');
+    } catch { message.error('Không cập nhật được'); }
+  };
+
+  const dirDeleteCc = async (id: number) => {
+    try {
+      const res = await deleteCcContact(id);
+      if (!res.success) throw new Error();
+      setCcList(prev => prev.filter(c => c.id !== id));
+      // Gỡ luôn khỏi danh sách đang soạn (nếu có)
+      setRecipDrafts(prev => prev.filter(r => r.kind !== 'cc' || !ccList.some(c => c.id === id && c.email.toLowerCase() === r.recipient_email.toLowerCase())));
+      message.success('Đã xóa khỏi cụm Cc');
+    } catch { message.error('Không xóa được'); }
+  };
+
+  const recipTag = (r: Recipient) => (
+    <Tag
+      key={r.recipient_email}
+      closable
+      onClose={() => setRecipDrafts(prev => prev.filter(x => x.recipient_email !== r.recipient_email))}
+      style={{ marginBottom: 4 }}
+    >
+      {r.recipient_name ? `${r.recipient_name} <${r.recipient_email}>` : r.recipient_email}
+    </Tag>
+  );
 
   const addGvcnOfClass = (classCode: string) => {
     const cls = classes.find(c => c.class_code === classCode);
@@ -294,6 +473,31 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
     } finally { setSaving(false); }
   };
 
+  const toggleCc = (on: boolean) => {
+    setCcOn(on);
+    if (on) {
+      setRecipDrafts(prev => {
+        const existing = new Set(prev.map(r => r.recipient_email.toLowerCase()));
+        const adds = ccList
+          .filter(c => c.email && !existing.has(c.email.toLowerCase()))
+          .map(c => ({ recipient_email: c.email, recipient_name: c.name, recipient_group: 'Ban lãnh đạo', kind: 'cc' }));
+        return [...prev, ...adds];
+      });
+      if (ccList.length > 0) message.success(`Đã thêm cụm Cc (${ccList.length} người)`);
+      else message.warning('Danh bạ Cc đang trống — thêm trong popup Danh bạ');
+    } else {
+      setRecipDrafts(prev => prev.filter(r => r.kind !== 'cc'));
+      message.info('Đã gỡ cụm Cc khỏi người nhận');
+    }
+  };
+
+  // Chia tags người nhận: cụm To (Giảng viên / Lớp / Khác) + cụm Cc
+  const ccDrafts = recipDrafts.filter(r => r.kind === 'cc');
+  const toDrafts = recipDrafts.filter(r => r.kind !== 'cc');
+  const gvDrafts = toDrafts.filter(r => r.recipient_group === 'GV');
+  const lopDrafts = toDrafts.filter(r => r.recipient_group === 'Lớp');
+  const otherDrafts = toDrafts.filter(r => r.recipient_group !== 'GV' && r.recipient_group !== 'Lớp');
+
   if (loading) {
     return <div style={{ textAlign: 'center', padding: '50px' }}><Spin size="large" tip="Đang tải công việc..." /></div>;
   }
@@ -376,7 +580,13 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
 
             <Card size="small" className="tc-card" title="Người nhận">
               <Space style={{ marginBottom: 8 }} wrap>
-                <Button size="small" onClick={addAllGvcn}>+ Toàn thể GVCN</Button>
+                <Button size="small" onClick={addAllGvAndClasses}>+ Tất cả GV + Lớp</Button>
+                <Button size="small" onClick={addGvOnly}>+ GV</Button>
+                <Button size="small" onClick={addLopOnly}>+ Lớp</Button>
+                <Button size="small" type={ccOn ? 'primary' : 'default'} onClick={() => toggleCc(!ccOn)}>
+                  {ccOn ? '✓ CC' : 'CC'}
+                </Button>
+                <Button size="small" onClick={() => setDirectoryOpen(true)}>Danh bạ</Button>
                 <Select
                   size="small"
                   style={{ width: 260 }}
@@ -385,20 +595,43 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
                   onChange={(v: string) => addGvcnOfClass(v)}
                   value={undefined}
                 />
+                {recipDrafts.length > 0 && (
+                  <Button size="small" danger onClick={() => { setRecipDrafts([]); message.info('Đã xóa hết người nhận'); }}>
+                    Xóa hết
+                  </Button>
+                )}
               </Space>
               <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
                 <Input placeholder="Email người nhận" value={recipEmail} onChange={e => setRecipEmail(e.target.value)} />
                 <Input placeholder="Tên (tùy chọn)" value={recipName} onChange={e => setRecipName(e.target.value)} />
                 <Button type="dashed" onClick={addDraftRecipient}>Thêm</Button>
               </Space.Compact>
-              <div>
-                {recipDrafts.map(r => (
-                  <Tag key={r.recipient_email} closable onClose={() => setRecipDrafts(prev => prev.filter(x => x.recipient_email !== r.recipient_email))} style={{ marginBottom: 4 }}>
-                    {r.recipient_name ? `${r.recipient_name} <${r.recipient_email}>` : r.recipient_email}
-                  </Tag>
-                ))}
-                {recipDrafts.length === 0 && <span style={{ color: '#999', fontSize: 12 }}>Chưa có người nhận — email chưa gửi được</span>}
-              </div>
+              {/* 4 khối chỉ hiện khi có người — mới mở trang thì gọn, thêm vào tự bung và ở luôn */}
+              {gvDrafts.length > 0 && (
+                <>
+                  <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Giảng viên ({gvDrafts.length})</div>
+                  <div style={{ marginBottom: 8 }}>{gvDrafts.map(recipTag)}</div>
+                </>
+              )}
+              {lopDrafts.length > 0 && (
+                <>
+                  <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Lớp ({lopDrafts.length})</div>
+                  <div style={{ marginBottom: 8 }}>{lopDrafts.map(recipTag)}</div>
+                </>
+              )}
+              {otherDrafts.length > 0 && (
+                <>
+                  <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Khác ({otherDrafts.length})</div>
+                  <div style={{ marginBottom: 4 }}>{otherDrafts.map(recipTag)}</div>
+                </>
+              )}
+              {ccDrafts.length > 0 && (
+                <>
+                  <div style={{ fontSize: 12, color: '#722ed1', marginBottom: 4 }}>Cc — Ban lãnh đạo ({ccDrafts.length})</div>
+                  <div style={{ marginBottom: 4 }}>{ccDrafts.map(recipTag)}</div>
+                </>
+              )}
+              {recipDrafts.length === 0 && <span style={{ color: '#999', fontSize: 12 }}>Chưa có người nhận — bấm nút preset hoặc nhập tay để thêm</span>}
 
               {taskTypeWatch === 'ChienDichPhanCong' && (
                 <Alert
@@ -538,6 +771,25 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
           );
         })}
       </Modal>
+
+      {/* Popup Danh bạ: GV + Lớp + Cc, sửa thẳng vào DB */}
+      <DirectoryModal
+        open={directoryOpen}
+        onClose={() => setDirectoryOpen(false)}
+        teachers={teachers}
+        classes={classes.map(c => ({ class_code: c.class_code, email: c.email }))}
+        ccList={ccList}
+        usingFallback={usingFallback}
+        onAddTeacher={dirAddTeacher}
+        onUpdateTeacher={dirUpdateTeacher}
+        onDeleteTeacher={dirDeleteTeacher}
+        onAddClass={dirAddClass}
+        onUpdateClassEmail={dirUpdateClassEmail}
+        onDeleteClass={dirDeleteClass}
+        onAddCc={dirAddCc}
+        onUpdateCc={dirUpdateCc}
+        onDeleteCc={dirDeleteCc}
+      />
     </div>
   );
 };

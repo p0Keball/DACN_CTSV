@@ -29,6 +29,8 @@ const menuItems = [
 const Header: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  // Route soạn (/cong-viec/moi, /:id/sua) vẫn highlight mục Công việc
+  const selectedKey = location.pathname.startsWith('/cong-viec') ? '/cong-viec' : location.pathname;
 
   return (
     <AntHeader
@@ -65,7 +67,7 @@ const Header: React.FC = () => {
         {/* Menu ngang */}
         <Menu
           mode="horizontal"
-          selectedKeys={[location.pathname]}
+          selectedKeys={[selectedKey]}
           onClick={(e) => navigate(e.key)}
           items={menuItems}
           style={{ borderBottom: 'none', flex: 1, minWidth: 0, lineHeight: '62px' }}

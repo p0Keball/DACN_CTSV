@@ -197,7 +197,7 @@ app.post('/api/teachers', async (req, res) => {
 app.get('/api/classes', async (req, res) => {
   try {
     const query = `
-      SELECT c.class_code, c.class_name, c.teacher_id, t.full_name AS teacher_name
+      SELECT c.class_code, c.class_name, c.teacher_id, c.email, t.full_name AS teacher_name
       FROM classes c
       LEFT JOIN teachers t ON c.teacher_id = t.id
       ORDER BY c.class_code
@@ -237,13 +237,18 @@ app.delete('/api/teachers/:id', async (req, res) => {
 // === CRUD LỚP HỌC ===
 app.post('/api/classes', async (req, res) => {
   try {
-    await pool.query('INSERT INTO classes (class_code, class_name) VALUES ($1, $2)', [req.body.class_code, req.body.class_name]);
+    await pool.query('INSERT INTO classes (class_code, class_name, email) VALUES ($1, $2, $3)',
+      [req.body.class_code, req.body.class_name || `Lớp ${req.body.class_code}`, req.body.email || null]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 app.put('/api/classes/:class_code', async (req, res) => {
   try {
-    await pool.query('UPDATE classes SET class_name=$1 WHERE class_code=$2', [req.body.class_name, req.params.class_code]);
+    // COALESCE để caller cũ (chỉ gửi class_name) không xóa mất email
+    await pool.query(
+      'UPDATE classes SET class_name = COALESCE($1, class_name), email = COALESCE($2, email) WHERE class_code = $3',
+      [req.body.class_name || null, req.body.email || null, req.params.class_code]
+    );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
@@ -369,6 +374,7 @@ app.delete('/api/attachments/:id', async (req, res) => {
 });
 
 // === NGƯỜI NHẬN EMAIL THẬT (§3.1: khác "Nơi nhận" của eOffice) ===
+// task_recipients.kind: 'to' (mặc định) | 'cc' — cụm Cc ban lãnh đạo
 app.get('/api/tasks/:taskId/recipients', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM task_recipients WHERE task_id = $1 ORDER BY id', [req.params.taskId]);
@@ -377,12 +383,12 @@ app.get('/api/tasks/:taskId/recipients', async (req, res) => {
 });
 
 app.post('/api/tasks/:taskId/recipients', async (req, res) => {
-  const { recipient_email, recipient_name, recipient_group } = req.body;
+  const { recipient_email, recipient_name, recipient_group, kind } = req.body;
   if (!recipient_email) return res.status(400).json({ success: false, message: 'Thiếu email người nhận' });
   try {
     const result = await pool.query(
-      'INSERT INTO task_recipients (task_id, recipient_email, recipient_name, recipient_group) VALUES ($1, $2, $3, $4) RETURNING *',
-      [req.params.taskId, recipient_email, recipient_name || null, recipient_group || null]
+      'INSERT INTO task_recipients (task_id, recipient_email, recipient_name, recipient_group, kind) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [req.params.taskId, recipient_email, recipient_name || null, recipient_group || null, kind === 'cc' ? 'cc' : 'to']
     );
     res.json({ success: true, data: result.rows[0] });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
@@ -391,6 +397,43 @@ app.post('/api/tasks/:taskId/recipients', async (req, res) => {
 app.delete('/api/recipients/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM task_recipients WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// === DANH BẠ CC (ban lãnh đạo — nguồn cụm Cc, sửa trong popup Danh bạ) ===
+app.get('/api/cc-contacts', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM cc_contacts ORDER BY id');
+    res.json({ success: true, data: result.rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.post('/api/cc-contacts', async (req, res) => {
+  const { name, email } = req.body;
+  if (!name || !email || !email.includes('@')) return res.status(400).json({ success: false, message: 'Thiếu tên hoặc email hợp lệ' });
+  try {
+    const result = await pool.query(
+      'INSERT INTO cc_contacts (name, email) VALUES ($1, $2) RETURNING *',
+      [name, email]
+    );
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.put('/api/cc-contacts/:id', async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE cc_contacts SET name = COALESCE($1, name), email = COALESCE($2, email) WHERE id = $3',
+      [req.body.name || null, req.body.email || null, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.delete('/api/cc-contacts/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM cc_contacts WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
@@ -417,9 +460,9 @@ app.post('/api/tasks/:taskId/send', async (req, res) => {
     const logs = [];
     for (const r of recipRes.rows) {
       const result = await pool.query(
-        `INSERT INTO email_reminders (task_id, recipient_email, recipient_type, subject, body_content, send_type, scheduled_at, sent_at, status)
-         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'Đã gửi') RETURNING *`,
-        [taskId, r.recipient_email, r.recipient_group || 'GVCN', task.title, task.content || '', sendType]
+        `INSERT INTO email_reminders (task_id, recipient_email, recipient_type, subject, body_content, send_type, kind, scheduled_at, sent_at, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'Đã gửi') RETURNING *`,
+        [taskId, r.recipient_email, r.recipient_group || 'GVCN', task.title, task.content || '', sendType, r.kind || 'to']
       );
       logs.push(result.rows[0]);
     }
@@ -498,6 +541,119 @@ app.delete('/api/participants/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM task_assignments WHERE id = $1', [req.params.id]);
     res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// === TỦ HỒ SƠ (tab Hồ sơ): gom file theo tháng tạo công việc ===
+// File vào task_attachments (upload tay, link Drive, sau này sync eOffice)
+// tự hiện ở đây — không cần ghi thêm chỗ nào khác.
+// 1. Thư viện nhóm theo tháng (chỉ task có file)
+app.get('/api/files/library', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT to_char(date_trunc('month', t.created_at), 'YYYY-MM') AS month,
+              t.id, t.title, t.created_at, t.source,
+              COUNT(a.id) AS file_count
+       FROM tasks t
+       JOIN task_attachments a ON a.task_id = t.id
+       GROUP BY 1, t.id, t.title, t.created_at, t.source
+       ORDER BY 1 DESC, t.created_at DESC, t.id DESC`
+    );
+    const months = [];
+    for (const row of result.rows) {
+      let m = months.find(x => x.month === row.month);
+      if (!m) { m = { month: row.month, tasks: [] }; months.push(m); }
+      m.tasks.push(row);
+    }
+    res.json({ success: true, data: months });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// 2. Tìm file theo tên file / tên công việc (+ lọc loại, nguồn)
+app.get('/api/files/search', async (req, res) => {
+  const q = `%${req.query.q || ''}%`;
+  const { type, source } = req.query;
+  try {
+    const conds = ['(a.file_name ILIKE $1 OR t.title ILIKE $1)'];
+    const params = [q];
+    if (type === 'pdf') conds.push(`(a.file_type ILIKE '%pdf%' OR a.file_name ILIKE '%.pdf')`);
+    else if (type === 'word') conds.push(`(a.file_type ILIKE '%word%' OR a.file_name ILIKE '%.doc%')`);
+    else if (type === 'excel') conds.push(`(a.file_type ILIKE '%sheet%' OR a.file_name ILIKE '%.xls%')`);
+    else if (type === 'image') conds.push(`(a.file_type ILIKE 'image/%')`);
+    else if (type === 'link') conds.push(`(a.file_type = 'link')`);
+    if (source) { params.push(source); conds.push(`t.source = $${params.length}`); }
+    const result = await pool.query(
+      `SELECT a.id, a.file_name, a.file_url, a.file_type, a.file_size,
+              t.id AS task_id, t.title AS task_title, t.created_at AS task_created, t.source
+       FROM task_attachments a
+       JOIN tasks t ON t.id = a.task_id
+       WHERE ${conds.join(' AND ')}
+       ORDER BY t.created_at DESC, a.id DESC
+       LIMIT 100`,
+      params
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+// === BÁO CÁO TỔNG HỢP (Gói 6, chỉ đọc) ===
+const REPORT_GROUPS = ['day', 'week', 'month', 'quarter', 'year'];
+
+// 1. Công việc theo kỳ: group=day|week|month|quarter|year, from/to ISO (optional)
+app.get('/api/reports/tasks', async (req, res) => {
+  const group = REPORT_GROUPS.includes(String(req.query.group)) ? req.query.group : 'month';
+  const { from, to } = req.query;
+  try {
+    const conds = ['deadline IS NOT NULL'];
+    const params = [];
+    if (from) { params.push(from); conds.push(`deadline >= $${params.length}`); }
+    if (to) { params.push(to); conds.push(`deadline <= $${params.length}`); }
+    const result = await pool.query(
+      `SELECT to_char(date_trunc('${group}', deadline), 'YYYY-MM-DD') AS period,
+              COUNT(*) AS total,
+              COUNT(*) FILTER (WHERE status = 'Hoàn thành') AS completed,
+              COUNT(*) FILTER (WHERE status != 'Hoàn thành' AND deadline < CURRENT_TIMESTAMP) AS overdue,
+              COUNT(*) FILTER (WHERE status != 'Hoàn thành' AND deadline >= CURRENT_TIMESTAMP) AS processing
+       FROM tasks
+       WHERE ${conds.join(' AND ')}
+       GROUP BY 1 ORDER BY 1`,
+      params
+    );
+    res.json({ success: true, data: result.rows, group });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// 2. Học kỳ đang dùng (cho bộ lọc báo cáo rèn luyện)
+app.get('/api/reports/semesters', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT semester FROM tasks WHERE semester IS NOT NULL AND semester != '' ORDER BY semester DESC`
+    );
+    res.json({ success: true, data: result.rows.map(r => r.semester) });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// 3. Thống kê rèn luyện theo học kỳ: mỗi SV 1 dòng (join task_assignments + tasks)
+app.get('/api/reports/participation', async (req, res) => {
+  const semester = req.query.semester || null;
+  try {
+    const result = await pool.query(
+      `SELECT s.student_id AS "StudentID",
+              s.first_name AS "FirstName",
+              s.last_name AS "LastName",
+              s.class_id AS "ClassStudentID",
+              COUNT(ta.id) AS assigned,
+              COUNT(*) FILTER (WHERE ta.status = 'Đã tham gia') AS participated,
+              COUNT(*) FILTER (WHERE ta.status = 'Vắng') AS absent
+       FROM students s
+       LEFT JOIN task_assignments ta ON ta.student_id = s.student_id
+         AND ($1::text IS NULL OR EXISTS (
+           SELECT 1 FROM tasks t WHERE t.id = ta.task_id AND t.semester = $1
+         ))
+       GROUP BY s.student_id, s.first_name, s.last_name, s.class_id
+       ORDER BY s.class_id, s.student_id`,
+      [semester]
+    );
+    res.json({ success: true, data: result.rows, semester });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 

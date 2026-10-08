@@ -168,8 +168,8 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
                   <Divider>Người nhận ({recipients.length})</Divider>
                   <div style={{ marginBottom: 12 }}>
                     {recipients.map(r => (
-                      <Tag key={r.id || r.recipient_email} style={{ marginBottom: 4 }}>
-                        {r.recipient_name ? `${r.recipient_name} <${r.recipient_email}>` : r.recipient_email}
+                      <Tag key={r.id || r.recipient_email} style={{ marginBottom: 4 }} color={r.kind === 'cc' ? 'purple' : undefined}>
+                        {r.kind === 'cc' ? '[Cc] ' : ''}{r.recipient_name ? `${r.recipient_name} <${r.recipient_email}>` : r.recipient_email}
                       </Tag>
                     ))}
                     {recipients.length === 0 && <span style={{ color: '#999' }}>Chưa có người nhận</span>}
