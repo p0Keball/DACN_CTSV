@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   Table, Input, Select, Button, Tag, Space, Card, message, Modal, 
   Descriptions, Badge, Tabs, Form, Popconfirm, Divider, List 
@@ -77,8 +77,20 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
-  const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Click ra ngoài cụm bảng + chi tiết thì đóng panel, bảng về full như cũ
+  useEffect(() => {
+    if (!selectedStudent) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setSelectedStudent(null);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [selectedStudent]);
 
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
@@ -265,20 +277,41 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
     setIsEmailModalVisible(false);
   };
 
-  const columns = [
+  const handleDeleteSingle = async (id: string) => {
+    setLoading(true);
+    try {
+      await deleteStudent(id);
+      message.success('Đã xóa sinh viên');
+      setSelectedStudent(null);
+      loadStudents();
+    } catch {
+      message.error('Có lỗi xảy ra khi xóa sinh viên');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRowClick = (record: Student) => (e: React.MouseEvent) => {
+    // Bấm vào checkbox chọn dòng thì không toggle panel chi tiết
+    const target = e.target as HTMLElement;
+    if (target.closest('.ant-checkbox-wrapper, .ant-checkbox, input, button, a')) return;
+    setSelectedStudent((prev) => (prev?.StudentID === record.StudentID ? null : record));
+  };
+
+  const fullColumns = [
     { title: 'MSSV', dataIndex: 'StudentID', key: 'StudentID', width: '12%', sorter: (a: Student, b: Student) => a.StudentID.localeCompare(b.StudentID) },
     { title: 'Họ và tên', key: 'FullName', sorter: (a: Student, b: Student) => a.FirstName.localeCompare(b.FirstName), render: (_: unknown, record: Student) => `${record.FirstName} ${record.LastName}` },
     { title: 'Lớp', dataIndex: 'ClassStudentID', key: 'ClassStudentID', width: '12%' },
     { title: 'Ngày sinh', dataIndex: 'BirthDay', key: 'BirthDay', width: '15%' },
     { title: 'Giới tính', dataIndex: 'Gender', key: 'Gender', width: '10%', render: (gender: string) => <Tag color={gender === 'Nam' ? 'blue' : 'magenta'}>{gender}</Tag> },
     { title: 'Chức vụ', dataIndex: 'ClassRoleID', key: 'ClassRoleID', width: '15%', render: (role: number) => <Tag color={role === 1 ? 'gold' : 'default'}>{role === 1 ? 'Lớp trưởng' : 'Sinh viên'}</Tag> },
-    { title: 'Thao tác', key: 'action', width: '15%', 
-      render: (_: unknown, record: Student) => (
-        <Space size="small">
-          <Button type="link" style={{ color: '#237804', padding: 0 }} onClick={() => {setSelectedStudent(record); setIsModalVisible(true)}}>Chi tiết</Button>
-          <Button type="link" icon={<EditOutlined />} onClick={() => openEditStudent(record)} style={{ padding: 0 }} />
-        </Space>
-      ) }
+  ];
+
+  // Khi đã chọn 1 hàng: bảng thu nhỏ bên trái, chỉ giữ MSSV / Họ tên / Lớp
+  const compactColumns = [
+    { title: 'MSSV', dataIndex: 'StudentID', key: 'StudentID', width: '30%' },
+    { title: 'Họ và tên', key: 'FullName', render: (_: unknown, record: Student) => `${record.FirstName} ${record.LastName}` },
+    { title: 'Lớp', dataIndex: 'ClassStudentID', key: 'ClassStudentID', width: '22%' },
   ];
 
   return (
@@ -304,19 +337,53 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
         )}
       </Space>
 
-      <Table 
-        rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }} 
-        columns={columns} 
-        dataSource={filteredStudents} 
-        rowKey="StudentID" 
-        loading={loading} 
-        pagination={{
-          defaultPageSize: 10,
-          showSizeChanger: true,
-          pageSizeOptions: ['10', '20', '50', '100'],
-          showTotal: (total, range) => `${range[0]}-${range[1]} của ${total} bản ghi`,
-        }}
-      />
+      <div ref={wrapRef} style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        <div style={{ flex: selectedStudent ? '0 0 52%' : '1 1 100%', minWidth: 0, transition: 'flex 0.2s ease' }}>
+          <Table
+            rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
+            columns={selectedStudent ? compactColumns : fullColumns}
+            dataSource={filteredStudents}
+            rowKey="StudentID"
+            loading={loading}
+            onRow={(record) => ({ onClick: handleRowClick(record), style: { cursor: 'pointer' } })}
+            rowClassName={(record) => selectedStudent?.StudentID === record.StudentID ? 'ant-table-row-selected' : ''}
+            pagination={{
+              defaultPageSize: 10,
+              showSizeChanger: true,
+              pageSizeOptions: ['10', '20', '50', '100'],
+              showTotal: (total, range) => `${range[0]}-${range[1]} của ${total} bản ghi`,
+            }}
+          />
+        </div>
+
+        {selectedStudent && (
+          <Card
+            size="small"
+            title={<span style={{ color: '#237804', fontWeight: 600 }}>Hồ sơ sinh viên</span>}
+            extra={<Button type="text" onClick={() => setSelectedStudent(null)}>Đóng ✕</Button>}
+            style={{ flex: '1 1 48%', minWidth: 0, position: 'sticky', top: 0 }}
+          >
+            <Descriptions bordered column={2} size="small" labelStyle={{ width: '130px', background: '#fafafa', fontWeight: 500 }}>
+              <Descriptions.Item label="Họ và tên" span={2}><strong style={{ fontSize: '15px' }}>{`${selectedStudent.FirstName} ${selectedStudent.LastName}`}</strong></Descriptions.Item>
+              <Descriptions.Item label="Mã số SV">{selectedStudent.StudentID}</Descriptions.Item>
+              <Descriptions.Item label="Lớp">{selectedStudent.ClassStudentID}</Descriptions.Item>
+              <Descriptions.Item label="Giới tính">{selectedStudent.Gender}</Descriptions.Item>
+              <Descriptions.Item label="Ngày sinh">{selectedStudent.BirthDay}</Descriptions.Item>
+              <Descriptions.Item label="Chức vụ">{selectedStudent.ClassRoleID === 1 ? <Tag color="gold">Lớp trưởng</Tag> : 'Sinh viên'}</Descriptions.Item>
+              <Descriptions.Item label="Trạng thái">{selectedStudent.IsInClass ? <Badge status="success" text="Đang theo học" /> : <Badge status="error" text="Đã nghỉ / Bảo lưu" />}</Descriptions.Item>
+              <Descriptions.Item label="Chương trình ĐT" span={2}>{selectedStudent.StudyProgramID || '---'}</Descriptions.Item>
+              <Descriptions.Item label="Nơi sinh" span={2}>{selectedStudent.BirthPlace || '---'}</Descriptions.Item>
+              <Descriptions.Item label="Thường trú" span={2}>{selectedStudent.PermanentResidence || '---'}</Descriptions.Item>
+            </Descriptions>
+            <Space style={{ marginTop: 12 }}>
+              <Button icon={<EditOutlined />} onClick={() => openEditStudent(selectedStudent)}>Sửa</Button>
+              <Popconfirm title={`Xóa sinh viên ${selectedStudent.StudentID}?`} onConfirm={() => handleDeleteSingle(selectedStudent.StudentID)}>
+                <Button danger icon={<DeleteOutlined />}>Xóa</Button>
+              </Popconfirm>
+            </Space>
+          </Card>
+        )}
+      </div>
 
       {/* --- MODAL SOẠN EMAIL CÔNG VIỆC GỬI SINH VIÊN --- */}
       <Modal
@@ -403,24 +470,6 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
         </Form>
       </Modal>
 
-      {/* Modal Hồ Sơ Sinh Viên */}
-      <Modal title={<div style={{ fontSize: '18px', color: '#237804', marginBottom: '16px' }}>Hồ sơ sinh viên</div>} open={isModalVisible} onCancel={() => setIsModalVisible(false)} footer={[<Button key="close" onClick={() => setIsModalVisible(false)}>Đóng</Button>]} width={700}>
-        {selectedStudent && (
-          <Descriptions bordered column={2} size="small" labelStyle={{ width: '130px', background: '#fafafa', fontWeight: 500 }}>
-            <Descriptions.Item label="Họ và tên" span={2}><strong style={{ fontSize: '15px' }}>{`${selectedStudent.FirstName} ${selectedStudent.LastName}`}</strong></Descriptions.Item>
-            <Descriptions.Item label="Mã số SV">{selectedStudent.StudentID}</Descriptions.Item>
-            <Descriptions.Item label="Lớp">{selectedStudent.ClassStudentID}</Descriptions.Item>
-            <Descriptions.Item label="Giới tính">{selectedStudent.Gender}</Descriptions.Item>
-            <Descriptions.Item label="Ngày sinh">{selectedStudent.BirthDay}</Descriptions.Item>
-            <Descriptions.Item label="Chức vụ">{selectedStudent.ClassRoleID === 1 ? <Tag color="gold">Lớp trưởng</Tag> : 'Sinh viên'}</Descriptions.Item>
-            <Descriptions.Item label="Trạng thái">{selectedStudent.IsInClass ? <Badge status="success" text="Đang theo học" /> : <Badge status="error" text="Đã nghỉ / Bảo lưu" />}</Descriptions.Item>
-            <Descriptions.Item label="Chương trình ĐT" span={2}>{selectedStudent.StudyProgramID || '---'}</Descriptions.Item>
-            <Descriptions.Item label="Nơi sinh" span={2}>{selectedStudent.BirthPlace || '---'}</Descriptions.Item>
-            <Descriptions.Item label="Thường trú" span={2}>{selectedStudent.PermanentResidence || '---'}</Descriptions.Item>
-          </Descriptions>
-        )}
-      </Modal>
-
       {/* Modal Thêm/Sửa Sinh Viên */}
       <Modal title={editingStudentId ? "Sửa Sinh viên" : "Thêm Sinh viên"} open={isFormVisible} onCancel={() => setIsFormVisible(false)} onOk={() => form.submit()} width={600} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSaveStudent}>
@@ -464,7 +513,19 @@ const TeacherList: React.FC<TeacherListProps> = ({ searchText }) => {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
-  
+  const [selectedTeacher, setSelectedTeacher] = useState<Teacher | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!selectedTeacher) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setSelectedTeacher(null);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [selectedTeacher]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form] = Form.useForm();
@@ -512,18 +573,35 @@ const TeacherList: React.FC<TeacherListProps> = ({ searchText }) => {
     }
   };
 
-  const columns = [
+  const handleRowClick = (record: Teacher) => (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('.ant-checkbox-wrapper, .ant-checkbox, input, button, a')) return;
+    setSelectedTeacher((prev) => (prev?.id === record.id ? null : record));
+  };
+
+  const handleDeleteSingle = async (id: number) => {
+    setLoading(true);
+    try {
+      await deleteTeacher(id);
+      message.success('Đã xóa giảng viên');
+      setSelectedTeacher(null);
+      loadTeachers();
+    } catch {
+      message.error('Có lỗi xảy ra khi xóa giảng viên');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fullColumns = [
     { title: 'Họ và tên', dataIndex: 'full_name', key: 'full_name' },
     { title: 'Email', dataIndex: 'email', key: 'email' },
     { title: 'Số điện thoại', dataIndex: 'phone', key: 'phone' },
-    {
-      title: 'Thao tác', key: 'action', width: '15%',
-      render: (_: unknown, record: Teacher) => (
-        <Space size="middle">
-          <Button type="link" icon={<EditOutlined />} onClick={() => openEditForm(record)} />
-        </Space>
-      )
-    }
+  ];
+
+  const compactColumns = [
+    { title: 'Họ và tên', dataIndex: 'full_name', key: 'full_name' },
+    { title: 'Email', dataIndex: 'email', key: 'email' },
   ];
 
   return (
@@ -537,18 +615,45 @@ const TeacherList: React.FC<TeacherListProps> = ({ searchText }) => {
         )}
       </Space>
 
-      <Table 
-        rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
-        columns={columns} 
-        dataSource={filteredTeachers} 
-        rowKey="id" 
-        loading={loading}
-        pagination={{
+      <div ref={wrapRef} style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        <div style={{ flex: selectedTeacher ? '0 0 52%' : '1 1 100%', minWidth: 0, transition: 'flex 0.2s ease' }}>
+          <Table
+            rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
+            columns={selectedTeacher ? compactColumns : fullColumns}
+            dataSource={filteredTeachers}
+            rowKey="id"
+            loading={loading}
+            onRow={(record) => ({ onClick: handleRowClick(record), style: { cursor: 'pointer' } })}
+            rowClassName={(record) => selectedTeacher?.id === record.id ? 'ant-table-row-selected' : ''}
+            pagination={{
     defaultPageSize: 10,
     showSizeChanger: true,
     pageSizeOptions: ['10', '20', '50', '100'],
     showTotal: (total, range) => `${range[0]}-${range[1]} của ${total} bản ghi`,
   }} />
+        </div>
+
+        {selectedTeacher && (
+          <Card
+            size="small"
+            title={<span style={{ color: '#237804', fontWeight: 600 }}>Chi tiết giảng viên</span>}
+            extra={<Button type="text" onClick={() => setSelectedTeacher(null)}>Đóng ✕</Button>}
+            style={{ flex: '1 1 48%', minWidth: 0, position: 'sticky', top: 0 }}
+          >
+            <Descriptions bordered column={1} size="small" labelStyle={{ width: '130px', background: '#fafafa', fontWeight: 500 }}>
+              <Descriptions.Item label="Họ và tên"><strong>{selectedTeacher.full_name}</strong></Descriptions.Item>
+              <Descriptions.Item label="Email">{selectedTeacher.email}</Descriptions.Item>
+              <Descriptions.Item label="Số điện thoại">{selectedTeacher.phone || '---'}</Descriptions.Item>
+            </Descriptions>
+            <Space style={{ marginTop: 12 }}>
+              <Button icon={<EditOutlined />} onClick={() => openEditForm(selectedTeacher)}>Sửa</Button>
+              <Popconfirm title={`Xóa giảng viên ${selectedTeacher.full_name}?`} onConfirm={() => handleDeleteSingle(selectedTeacher.id)}>
+                <Button danger icon={<DeleteOutlined />}>Xóa</Button>
+              </Popconfirm>
+            </Space>
+          </Card>
+        )}
+      </div>
 
       <Modal title={editingId ? "Sửa Giảng viên" : "Thêm Giảng viên mới"} open={isModalVisible} onCancel={() => setIsModalVisible(false)} onOk={() => form.submit()} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSave}>
@@ -574,7 +679,20 @@ const ClassManagement: React.FC<ClassManagementProps> = ({ searchText }) => {
   const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [editingCode, setEditingCode] = useState<string | null>(null);
+  const [selectedClassRow, setSelectedClassRow] = useState<ClassItem | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const [form] = Form.useForm();
+
+  useEffect(() => {
+    if (!selectedClassRow) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setSelectedClassRow(null);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [selectedClassRow]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -615,7 +733,19 @@ const ClassManagement: React.FC<ClassManagementProps> = ({ searchText }) => {
     if (res.success) { message.success('Xóa thành công!'); loadData(); }
   };
 
-  const columns = [
+  const handleDeleteAndClose = async (classCode: string) => {
+    await handleDelete(classCode);
+    setSelectedClassRow(null);
+  };
+
+  const handleRowClick = (record: ClassItem) => (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    // Bấm vào Select gán GVCN trong bảng full thì không toggle panel
+    if (target.closest('.ant-select, button, a, input')) return;
+    setSelectedClassRow((prev) => (prev?.class_code === record.class_code ? null : record));
+  };
+
+  const fullColumns = [
     { title: 'Mã lớp', dataIndex: 'class_code', key: 'class_code', width: '20%' },
     { title: 'Tên lớp', dataIndex: 'class_name', key: 'class_name', width: '30%' },
     {
@@ -629,23 +759,61 @@ const ClassManagement: React.FC<ClassManagementProps> = ({ searchText }) => {
         />
       )
     },
-    {
-      title: 'Thao tác', key: 'action', width: '15%',
-      render: (_: unknown, record: ClassItem) => (
-        <Space size="middle">
-          <Button type="link" icon={<EditOutlined />} onClick={() => openEditForm(record)} />
-          <Popconfirm title="Xóa lớp sẽ xóa toàn bộ sinh viên bên trong. Tiếp tục?" onConfirm={() => handleDelete(record.class_code)}>
-            <Button type="link" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </Space>
-      )
-    }
+  ];
+
+  const compactColumns = [
+    { title: 'Mã lớp', dataIndex: 'class_code', key: 'class_code', width: '35%' },
+    { title: 'Tên lớp', dataIndex: 'class_name', key: 'class_name' },
   ];
 
   return (
     <div>
       <Button type="primary" icon={<PlusOutlined />} onClick={openAddForm} style={{ marginBottom: 16 }}>Thêm Lớp học</Button>
-      <Table columns={columns} dataSource={filteredClasses} rowKey="class_code" loading={loading} pagination={false} />
+      <div ref={wrapRef} style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        <div style={{ flex: selectedClassRow ? '0 0 52%' : '1 1 100%', minWidth: 0, transition: 'flex 0.2s ease' }}>
+          <Table
+            columns={selectedClassRow ? compactColumns : fullColumns}
+            dataSource={filteredClasses}
+            rowKey="class_code"
+            loading={loading}
+            pagination={false}
+            onRow={(record) => ({ onClick: handleRowClick(record), style: { cursor: 'pointer' } })}
+            rowClassName={(record) => selectedClassRow?.class_code === record.class_code ? 'ant-table-row-selected' : ''}
+          />
+        </div>
+
+        {selectedClassRow && (
+          <Card
+            size="small"
+            title={<span style={{ color: '#237804', fontWeight: 600 }}>Chi tiết lớp học</span>}
+            extra={<Button type="text" onClick={() => setSelectedClassRow(null)}>Đóng ✕</Button>}
+            style={{ flex: '1 1 48%', minWidth: 0, position: 'sticky', top: 0 }}
+          >
+            <Descriptions bordered column={1} size="small" labelStyle={{ width: '150px', background: '#fafafa', fontWeight: 500 }}>
+              <Descriptions.Item label="Mã lớp"><strong>{selectedClassRow.class_code}</strong></Descriptions.Item>
+              <Descriptions.Item label="Tên lớp">{selectedClassRow.class_name}</Descriptions.Item>
+              <Descriptions.Item label="GVCN hiện tại">{selectedClassRow.teacher_name || '---'}</Descriptions.Item>
+            </Descriptions>
+            <div style={{ marginTop: 12 }}>
+              <div style={{ marginBottom: 6, fontWeight: 500 }}>Gán Giảng viên Chủ nhiệm:</div>
+              <Select
+                showSearch allowClear style={{ width: '100%' }} placeholder="Chọn Giảng viên..."
+                defaultValue={selectedClassRow.teacher_id}
+                key={selectedClassRow.class_code}
+                onChange={(val) => handleAssign(selectedClassRow.class_code, val)}
+                options={teachers.map(t => ({ label: t.full_name, value: t.id }))}
+                filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+              />
+            </div>
+            <Space style={{ marginTop: 12 }}>
+              <Button icon={<EditOutlined />} onClick={() => openEditForm(selectedClassRow)}>Sửa</Button>
+              <Popconfirm title="Xóa lớp sẽ xóa toàn bộ sinh viên bên trong. Tiếp tục?" onConfirm={() => handleDeleteAndClose(selectedClassRow.class_code)}>
+                <Button danger icon={<DeleteOutlined />}>Xóa</Button>
+              </Popconfirm>
+            </Space>
+          </Card>
+        )}
+      </div>
       <Modal title={editingCode ? "Sửa Lớp học" : "Thêm Lớp học mới"} open={isModalVisible} onCancel={() => setIsModalVisible(false)} onOk={() => form.submit()} destroyOnClose>
         <Form form={form} layout="vertical" onFinish={handleSave}>
           <Form.Item name="class_code" label="Mã lớp (VD: ITK47A)" rules={[{ required: true }]}><Input disabled={!!editingCode} /></Form.Item>
