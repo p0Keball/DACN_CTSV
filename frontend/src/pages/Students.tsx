@@ -113,7 +113,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
     try {
       const res = await getStudents();
       if (res.success) setStudents(res.data);
-    } catch (error) {
+    } catch {
       message.error('Không thể tải dữ liệu sinh viên');
     } finally {
       setLoading(false);
@@ -122,7 +122,9 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
 
   useEffect(() => {
     let isMounted = true;
-    if (isMounted) loadStudents();
+    Promise.resolve()
+      .then(() => { if (isMounted) return loadStudents(); })
+      .catch(() => undefined);
     return () => { isMounted = false; };
   }, [loadStudents]);
 
@@ -176,7 +178,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
       message.success(`Đã xóa thành công ${selectedRowKeys.length} sinh viên`);
       setSelectedRowKeys([]);
       loadStudents();
-    } catch (error) {
+    } catch {
       message.error('Có lỗi xảy ra khi xóa nhiều sinh viên');
     } finally {
       setLoading(false);
@@ -201,7 +203,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
       if (res.success) {
         setAvailableTasks(res.data);
       }
-    } catch (error) {
+    } catch {
       message.error('Không thể tải danh sách công việc');
     } finally {
       setLoadingTasks(false);
@@ -263,7 +265,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
       try {
         await navigator.clipboard.writeText(bccList);
         message.success(`Đã sao chép ${selectedRowKeys.length} email! Hãy bấm Ctrl+V vào ô BCC trên Gmail.`);
-      } catch (err) {
+      } catch {
         message.warning('Không thể tự động chép email, vui lòng kiểm tra quyền truy cập Clipboard.');
       }
 
@@ -537,7 +539,11 @@ const TeacherList: React.FC<TeacherListProps> = ({ searchText }) => {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadTeachers(); }, [loadTeachers]);
+  useEffect(() => {
+    Promise.resolve()
+      .then(() => loadTeachers())
+      .catch(() => undefined);
+  }, [loadTeachers]);
 
   const filteredTeachers = useMemo(() => {
     return teachers.filter(t => 
@@ -566,7 +572,7 @@ const TeacherList: React.FC<TeacherListProps> = ({ searchText }) => {
       message.success(`Đã xóa thành công ${selectedRowKeys.length} giảng viên`);
       setSelectedRowKeys([]);
       loadTeachers();
-    } catch (error) {
+    } catch {
       message.error('Có lỗi xảy ra khi xóa giảng viên');
     } finally {
       setLoading(false);
@@ -702,7 +708,11 @@ const ClassManagement: React.FC<ClassManagementProps> = ({ searchText }) => {
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    Promise.resolve()
+      .then(() => loadData())
+      .catch(() => undefined);
+  }, [loadData]);
 
   const filteredClasses = useMemo(() => {
     return classes.filter(c => 
@@ -852,7 +862,7 @@ const AcademicManagement: React.FC = () => {
         } else {
           message.error(res.message || 'Lỗi đồng bộ dữ liệu');
         }
-      } catch (error) {
+      } catch {
         message.error('Không thể kết nối đến máy chủ');
       } finally {
         setIsSyncing(false);

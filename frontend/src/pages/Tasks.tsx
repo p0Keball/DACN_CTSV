@@ -137,10 +137,10 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
       {/* DRAWER CHI TIẾT: email + lịch sử gửi */}
       <Drawer
         title={currentAssignTask ? `Công việc: ${currentAssignTask.title}` : 'Chi tiết công việc'}
-        width={860}
+        size={860}
         onClose={() => setIsAssignVisible(false)}
         open={isAssignVisible}
-        destroyOnClose
+        destroyOnHidden
       >
         <Tabs
           defaultActiveKey="1"
@@ -176,7 +176,7 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
                   </div>
                   <Divider>Tập tin đính kèm</Divider>
                   <Card size="small" style={{ backgroundColor: '#fafafa' }}>
-                    <Space direction="vertical">
+                    <Space orientation="vertical">
                       {attachments.map(a => (
                         <Button key={a.id} type="link" href={a.file_url} target="_blank" icon={<FileTextOutlined />}>{a.file_name}</Button>
                       ))}

@@ -4,10 +4,48 @@ const cors = require('cors');
 const axios = require('axios');
 require('dotenv').config();
 const pool = require('./config/db'); // File kết nối PostgreSQL Supabase
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// === ĐĂNG NHẬP ADMIN (Gói 7: 1 tài khoản duy nhất, không đăng ký) ===
+// GET mở để xem/báo cáo; mọi POST/PUT/PATCH/DELETE đều cần Bearer token.
+const requireAuth = (req, res, next) => {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token) return res.status(401).json({ success: false, message: 'Chưa đăng nhập' });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập hết hạn' });
+  }
+};
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET' || req.path === '/auth/login') return next();
+  return requireAuth(req, res, next);
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ success: false, message: 'Thiếu tên đăng nhập hoặc mật khẩu' });
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    const user = result.rows[0];
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+      return res.status(401).json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu' });
+    }
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
+    res.json({ success: true, data: { token, username: user.username, role: user.role } });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  res.json({ success: true, data: { username: req.user.username, role: req.user.role } });
+});
 
 const multer = require('multer');
 const path = require('path');
@@ -24,7 +62,17 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => cb(null, Date.now() + '-' + Buffer.from(file.originalname, 'latin1').toString('utf8'))
 });
-const upload = multer({ storage: storage });
+// Chặn file quá to / sai loại ngay từ upload (đỡ sập server vì 1 file phim)
+const ALLOWED_UPLOAD = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv|jpg|jpeg|png|gif|zip|rar)$/i;
+const upload = multer({
+  storage,
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+  fileFilter: (req, file, cb) => {
+    const name = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    if (ALLOWED_UPLOAD.test(name)) return cb(null, true);
+    cb(new Error('Chỉ nhận file PDF/Office/ảnh/zip dưới 20MB'));
+  },
+});
 
 // Mở public thư mục uploads để Frontend có thể click vào xem/tải file
 app.use('/uploads', express.static(uploadDir));
@@ -38,8 +86,6 @@ app.post('/api/students/sync', async (req, res) => {
   }
 
   // 1. In ra Terminal để kiểm tra xem Backend đã đọc được API Key chưa
-  console.log("🔥 Đang kiểm tra API Key:", process.env.DLU_API_KEY ? "Đã nhận được Key" : "LỖI: Chưa có Key (Undefined)");
-  console.log("🔥 Lớp cần đồng bộ:", classId);
 
   try {
     const response = await axios.post(
@@ -292,6 +338,15 @@ app.get('/api/tasks', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM tasks ORDER BY deadline ASC');
     res.json({ success: true, data: result.rows });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// Lấy 1 công việc (trang Sửa dùng — khỏi tải hết danh sách về tìm 1 cái)
+app.get('/api/tasks/:id', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM tasks WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Không tìm thấy công việc' });
+    res.json({ success: true, data: result.rows[0] });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
@@ -658,6 +713,13 @@ app.get('/api/reports/participation', async (req, res) => {
 });
 
 
+
+// Lỗi upload (sai loại/quá 20MB) trả JSON thay vì HTML mặc định của Express
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File vượt quá 20MB' : (err.message || 'Lỗi upload file');
+  res.status(400).json({ success: false, message: msg });
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server Backend running on http://localhost:${PORT}`));

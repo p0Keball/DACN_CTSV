@@ -56,6 +56,11 @@ const Reports: React.FC = () => {
   const [partRows, setPartRows] = useState<ParticipationRow[]>([]);
   const [partLoading, setPartLoading] = useState(true);
   const [partSearch, setPartSearch] = useState('');
+  const [partKeyword, setPartKeyword] = useState('');
+  useEffect(() => {
+    const t = window.setTimeout(() => setPartKeyword(partSearch.trim().toLowerCase()), 300);
+    return () => window.clearTimeout(t);
+  }, [partSearch]);
 
   useEffect(() => {
     getSemesters()
@@ -88,7 +93,7 @@ const Reports: React.FC = () => {
   }, [semester]);
 
   const filteredParts = partRows.filter(r => {
-    const kw = partSearch.trim().toLowerCase();
+    const kw = partKeyword;
     if (!kw) return true;
     return r.StudentID.toLowerCase().includes(kw) ||
       `${r.FirstName} ${r.LastName}`.toLowerCase().includes(kw) ||

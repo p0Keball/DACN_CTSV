@@ -3,6 +3,34 @@ import axios from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
+// Gói 7: token admin lưu localStorage, tự gắn vào mọi request
+export const setAuthToken = (token?: string) => {
+  if (token) axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+  else delete axios.defaults.headers.common['Authorization'];
+};
+setAuthToken(localStorage.getItem('ctsv_token') || undefined);
+
+// Hết hạn/không token mà gọi API ghi → đá về trang đăng nhập
+axios.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401 && window.location.pathname !== '/dang-nhap') {
+      localStorage.removeItem('ctsv_token');
+      localStorage.removeItem('ctsv_user');
+      window.location.href = '/dang-nhap';
+    }
+    return Promise.reject(err);
+  }
+);
+
+export const login = async (username: string, password: string) =>
+  (await axios.post(`${API_BASE_URL}/auth/login`, { username, password })).data;
+export const logout = () => {
+  localStorage.removeItem('ctsv_token');
+  localStorage.removeItem('ctsv_user');
+  setAuthToken(undefined);
+};
+
 // Hàm lấy số liệu thống kê
 export const getTaskStats = async () => {
   const response = await axios.get(`${API_BASE_URL}/tasks/stats`);
@@ -38,6 +66,7 @@ export const deleteStudent = async (studentId: string) => (await axios.delete(`$
 
 // Quản lý Công việc
 export const getTasks = async () => (await axios.get(`${API_BASE_URL}/tasks`)).data;
+export const getTask = async (id: number) => (await axios.get(`${API_BASE_URL}/tasks/${id}`)).data;
 export const addTask = async (data: Record<string, unknown>) => (await axios.post(`${API_BASE_URL}/tasks`, data)).data;
 export const updateTask = async (id: number, data: Record<string, unknown>) => (await axios.put(`${API_BASE_URL}/tasks/${id}`, data)).data;
 export const deleteTask = async (id: number) => (await axios.delete(`${API_BASE_URL}/tasks/${id}`)).data;

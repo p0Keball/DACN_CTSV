@@ -27,7 +27,7 @@ const fmtTime = (iso: string) => {
 };
 
 const priorityColor = (p: string) =>
-  p === 'Cao' ? 'red' : p === 'Trung bình' ? 'orange' : 'green';
+  p === 'Cao' ? 'red' : p === 'Bình thường' ? 'orange' : 'green';
 const statusColor = (s: string) =>
   s === 'Hoàn thành' ? 'success' : s === 'Đang xử lý' ? 'processing' : 'default';
 
@@ -146,6 +146,8 @@ const DataSections: React.FC<DataSectionsProps> = ({ tasks = [] }) => {
                     onClick={() => setActive({ y: viewYear, m: viewMonth, d: day })}
                     style={{
                       minHeight: 64,
+                      minWidth: 0, // khóa ô không dãn theo chữ dài (lưới 7 cột cố định)
+                      overflow: 'hidden',
                       border: isActive ? '2px solid #237804' : '1px solid #f0f0f0',
                       borderRadius: 8,
                       padding: 4,
@@ -172,7 +174,7 @@ const DataSections: React.FC<DataSectionsProps> = ({ tasks = [] }) => {
                       ))}
                     </div>
                     {list.length > 0 && (
-                      <div style={{ fontSize: 10, color: '#595959', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <div style={{ fontSize: 10, color: '#595959', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
                         {list[0].title}
                       </div>
                     )}

@@ -5,7 +5,7 @@ import type { UploadFile } from 'antd';
 import dayjs from 'dayjs';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  getTasks, getStudents, addTask, updateTask, addTaskAttachmentLink, uploadTaskFiles,
+  getTask, getStudents, addTask, updateTask, addTaskAttachmentLink, uploadTaskFiles,
   getTaskRecipients, addTaskRecipient, deleteRecipient, sendTaskEmail, getClasses, getTeachers,
   getTaskParticipants, addTaskParticipants, deleteParticipant,
   addTeacher, updateTeacher, deleteTeacher, addClass, updateClass, deleteClass,
@@ -116,9 +116,20 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
   const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
   const [assignOpen, setAssignOpen] = useState(false);
   const [selectedModal, setSelectedModal] = useState(false);
+  const [assignKeyword, setAssignKeyword] = useState('');
+  useEffect(() => {
+    const t = window.setTimeout(() => setAssignKeyword(assignSearch.trim().toLowerCase()), 300);
+    return () => window.clearTimeout(t);
+  }, [assignSearch]);
 
   useEffect(() => {
-    getClasses().then(res => { if (res.success) setClasses(res.data); }).catch(() => undefined);
+    getClasses().then(res => {
+      if (res.success) {
+        setClasses(res.data);
+        // Mặc định hiện SV 1 lớp đầu (nhẹ) thay vì tất cả — muốn hết thì chọn "Tất cả"
+        if (res.data.length > 0) setAssignClasses(prev => (prev.length === 0 ? [res.data[0].class_code] : prev));
+      }
+    }).catch(() => undefined);
     getTeachers().then(res => { if (res.success) setTeachers(res.data); }).catch(() => undefined);
     getStudents().then(res => { if (res.success) setAllStudents(res.data); }).catch(() => undefined);
     getCcContacts().then(res => { if (res.success) setCcList(res.data); }).catch(() => undefined);
@@ -142,9 +153,9 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
     let isMounted = true;
     (async () => {
       try {
-        const [tasksRes, recipRes, partRes] = await Promise.all([getTasks(), getTaskRecipients(editingId), getTaskParticipants(editingId)]);
+        const [taskRes, recipRes, partRes] = await Promise.all([getTask(editingId), getTaskRecipients(editingId), getTaskParticipants(editingId)]);
         if (!isMounted) return;
-        const task = tasksRes.success ? tasksRes.data.find((t: { id: number }) => t.id === editingId) : null;
+        const task = taskRes.success ? taskRes.data : null;
         if (!task) { message.error('Không tìm thấy công việc'); stableDone(); return; }
         form.setFieldsValue({
           ...task,
@@ -499,17 +510,30 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
   const otherDrafts = toDrafts.filter(r => r.recipient_group !== 'GV' && r.recipient_group !== 'Lớp');
 
   if (loading) {
-    return <div style={{ textAlign: 'center', padding: '50px' }}><Spin size="large" tip="Đang tải công việc..." /></div>;
+    return <div style={{ textAlign: 'center', padding: '50px' }}><Spin size="large" description="Đang tải công việc..." /></div>;
   }
 
-  // Danh sách SV hiển thị ở khối phân công: lọc theo lớp đã chọn + ô tìm kiếm
-  const keyword = assignSearch.trim().toLowerCase();
+  // Danh sách SV hiển thị ở khối phân công: lọc theo lớp đã chọn + ô tìm kiếm (debounce).
+  // Mặc định chỉ 1 lớp đầu (nhẹ); chọn "Tất cả" mới hiện hết.
+  const showAllClasses = assignClasses.includes('__ALL__');
+  const keyword = assignKeyword;
   const visibleStudents = allStudents.filter(s => {
-    if (assignClasses.length > 0 && !assignClasses.includes(s.ClassStudentID)) return false;
+    if (!showAllClasses) {
+      if (assignClasses.length === 0) return false; // bỏ chọn hết lớp = không hiện ai (nhẹ)
+      if (!assignClasses.includes(s.ClassStudentID)) return false;
+    }
     if (!keyword) return true;
     const name = `${s.FirstName} ${s.LastName}`.toLowerCase();
     return s.StudentID.toLowerCase().includes(keyword) || name.includes(keyword);
   });
+
+  const selectAllVisible = () => {
+    setSelectedStudents(prev => {
+      const set = new Set(prev);
+      visibleStudents.forEach(s => set.add(s.StudentID));
+      return [...set];
+    });
+  };
 
   return (
     <div>
@@ -531,7 +555,7 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
         form={form}
         layout="vertical"
         onValuesChange={handleFormChange}
-        initialValues={{ source: 'Thủ công', task_type: 'ThongBaoDon', priority: 'Bình thường', remind_before_days: 0 }}
+        initialValues={{ source: 'Thủ công', task_type: 'ThongBaoDon', priority: 'Bình thường', remind_before_days: 0, semester: 'HK1 2026-2027' }}
       >
         <div className="tc-grid">
           {/* Cột trái: Nguồn & Loại công việc */}
@@ -596,7 +620,7 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
                   value={undefined}
                 />
                 {recipDrafts.length > 0 && (
-                  <Button size="small" danger onClick={() => { setRecipDrafts([]); message.info('Đã xóa hết người nhận'); }}>
+                  <Button size="small" danger onClick={() => { setRecipDrafts([]); setCcOn(false); message.info('Đã xóa hết người nhận (kể cả Cc)'); }}>
                     Xóa hết
                   </Button>
                 )}
@@ -638,7 +662,7 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
                   style={{ marginTop: 8 }}
                   type="warning"
                   showIcon
-                  message="Chiến dịch phân công: chọn sinh viên ở khối bên dưới, theo dõi điểm danh ở trang chi tiết"
+                  title="Chiến dịch phân công: chọn sinh viên ở khối bên dưới, theo dõi điểm danh ở trang chi tiết"
                 />
               )}
             </Card>
@@ -657,7 +681,10 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
                       mode="multiple"
                       style={{ minWidth: 280, flex: 1 }}
                       placeholder="Chọn lớp cần huy động..."
-                      options={classes.map(c => ({ value: c.class_code, label: c.class_code }))}
+                      options={[
+                        { value: '__ALL__', label: 'Tất cả sinh viên' },
+                        ...classes.map(c => ({ value: c.class_code, label: c.class_code })),
+                      ]}
                       value={assignClasses}
                       onChange={(v: string[]) => setAssignClasses(v)}
                     />
@@ -674,6 +701,9 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
                     <Button size="small" disabled={selectedStudents.length === 0} onClick={() => setSelectedModal(true)}>
                       Xem danh sách đã chọn
                     </Button>
+                    <Button size="small" disabled={visibleStudents.length === 0} onClick={selectAllVisible}>
+                      Chọn tất cả {visibleStudents.length} đang lọc
+                    </Button>
                     {selectedStudents.length > 0 && (
                       <Button size="small" type="link" danger onClick={() => setSelectedStudents([])}>Bỏ chọn hết</Button>
                     )}
@@ -681,9 +711,8 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
                   <Table
                     size="small"
                     rowKey="StudentID"
-                    pagination={false}
-                    scroll={{ y: 320 }}
-                    locale={{ emptyText: assignClasses.length === 0 ? 'Chọn ít nhất 1 lớp để thấy danh sách sinh viên' : 'Không tìm thấy sinh viên' }}
+                    pagination={{ pageSize: 30, showSizeChanger: false }}
+                    locale={{ emptyText: assignClasses.length === 0 && !showAllClasses ? 'Chọn ít nhất 1 lớp để thấy danh sách sinh viên' : 'Không tìm thấy sinh viên' }}
                     rowSelection={{
                       selectedRowKeys: selectedStudents,
                       onChange: (keys) => setSelectedStudents(keys as string[]),
@@ -708,10 +737,10 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
           <div className="tc-side">
             <Card size="small" className="tc-card" title="Thiết lập">
               <Form.Item name="semester" label="Học kỳ" rules={[{ required: true, message: 'Chọn học kỳ' }]}>
+                {/* Năm học mới: thêm option vào đúng chỗ này */}
                 <Select placeholder="VD: HK1 2026-2027" options={[
-                  { value: 'HK1 2025-2026', label: 'HK1 2025-2026' },
-                  { value: 'HK2 2025-2026', label: 'HK2 2025-2026' },
                   { value: 'HK1 2026-2027', label: 'HK1 2026-2027' },
+                  { value: 'HK2 2026-2027', label: 'HK2 2026-2027' },
                 ]} />
               </Form.Item>
               <Form.Item name="deadline" label="Deadline" rules={[{ required: true, message: 'Chọn deadline' }]}>

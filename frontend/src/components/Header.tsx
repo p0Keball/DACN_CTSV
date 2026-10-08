@@ -1,9 +1,8 @@
 import React from 'react';
-import { Layout, Menu, Badge, Avatar, Space, Typography } from 'antd';
+import { Layout, Menu, Avatar, Space, Typography } from 'antd';
 import {
   DashboardOutlined,
   UnorderedListOutlined,
-  ApartmentOutlined,
   UserOutlined,
   FolderOutlined,
   BarChartOutlined,
@@ -11,19 +10,21 @@ import {
   ReadOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { LogoutOutlined } from '@ant-design/icons';
+import { logout } from '../services/api';
 
 const { Header: AntHeader } = Layout;
 const { Text } = Typography;
 
-// Định nghĩa menu 
+// Định nghĩa menu (Quy trình / Thông báo chưa có trang — ẩn tạm để khỏi bấm vào trắng)
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: 'Tổng quan' },
   { key: '/cong-viec', icon: <UnorderedListOutlined />, label: 'Công việc' },
-  { key: '/quy-trinh', icon: <ApartmentOutlined />, label: 'Quy trình' },
+  // { key: '/quy-trinh', icon: <ApartmentOutlined />, label: 'Quy trình' },
   { key: '/sinh-vien', icon: <UserOutlined />, label: 'Quản lý đào tạo' },
   { key: '/ho-so', icon: <FolderOutlined />, label: 'Hồ sơ' },
   { key: '/bao-cao', icon: <BarChartOutlined />, label: 'Báo cáo' },
-  { key: '/thong-bao', icon: <BellOutlined />, label: 'Thông báo' },
+  // { key: '/thong-bao', icon: <BellOutlined />, label: 'Thông báo' },
 ];
 
 const Header: React.FC = () => {
@@ -74,19 +75,24 @@ const Header: React.FC = () => {
         />
       </div>
 
-      {/* Vùng bên phải: Thông báo & Tài khoản */}
+      {/* Vùng bên phải: Tài khoản (ẩn khi chưa đăng nhập) */}
+      {localStorage.getItem('ctsv_token') && (
       <Space size="large" align="center" style={{ marginLeft: '16px' }}>
-        <Badge count={3}>
-          <BellOutlined style={{ fontSize: '20px', cursor: 'pointer' }} />
-        </Badge>
+        <BellOutlined style={{ fontSize: '20px', cursor: 'pointer' }} />
         <Space style={{ cursor: 'pointer' }}>
-          <Avatar icon={<UserOutlined />} style={{ backgroundColor: '#1677ff' }} />
+          <Avatar icon={<UserOutlined />} style={{ backgroundColor: '#237804' }} />
           <div style={{ display: 'flex', flexDirection: 'column', lineHeight: '1.2' }}>
-            <Text strong>Nguyễn Văn A</Text>
-            <Text type="secondary" style={{ fontSize: '12px' }}>Trợ lý CTSV</Text>
+            <Text strong>{localStorage.getItem('ctsv_user') || 'Trợ lý CTSV'}</Text>
+            <Text type="secondary" style={{ fontSize: '12px' }}>Quản trị viên</Text>
           </div>
         </Space>
+        <LogoutOutlined
+          title="Đăng xuất"
+          style={{ fontSize: '18px', cursor: 'pointer' }}
+          onClick={() => { logout(); navigate('/dang-nhap'); }}
+        />
       </Space>
+      )}
     </AntHeader>
   );
 };

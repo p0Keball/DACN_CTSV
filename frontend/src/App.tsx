@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Layout, ConfigProvider } from 'antd';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
@@ -8,6 +8,7 @@ import TasksWorkspace from './pages/TasksWorkspace';
 import TaskCompose from './pages/TaskCompose';
 import ReportsPage from './pages/ReportsPage';
 import RecordsPage from './pages/RecordsPage';
+import LoginPage from './pages/LoginPage';
 
 const { Content } = Layout;
 
@@ -26,6 +27,15 @@ const PageContent: React.FC = () => {
   // Workspace Công việc mount thường trực (Gói 2d): sang mục khác chỉ ẩn CSS,
   // tab soạn + nháp không mất. Route /cong-viec chỉ giữ chỗ.
   const onTasks = location.pathname === '/cong-viec';
+  const loggedIn = !!localStorage.getItem('ctsv_token');
+  // Gói 7: chưa đăng nhập → chỉ được ở trang đăng nhập
+  if (!loggedIn && location.pathname !== '/dang-nhap') {
+    return (
+      <Content style={{ padding: '24px', background: '#f4f7fb', display: 'flex', justifyContent: 'center' }}>
+        <Navigate to="/dang-nhap" replace />
+      </Content>
+    );
+  }
   return (
     <Content style={{
       padding: '24px',
@@ -45,6 +55,8 @@ const PageContent: React.FC = () => {
           <Route path="/cong-viec/:id/sua" element={<TaskCompose />} />
           <Route path="/bao-cao" element={<ReportsPage />} />
           <Route path="/ho-so" element={<RecordsPage />} />
+          <Route path="/dang-nhap" element={<LoginPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
     </Content>

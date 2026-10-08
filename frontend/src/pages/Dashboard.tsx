@@ -40,7 +40,7 @@ const Dashboard: React.FC = () => {
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '50px' }}>
-        <Spin size="large" tip="Đang kết nối dữ liệu PostgreSQL..." />
+        <Spin size="large" description="Đang kết nối dữ liệu PostgreSQL..." />
       </div>
     );
   }
