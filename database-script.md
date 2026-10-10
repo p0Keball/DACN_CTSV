@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS teachers (
 
 ```sql
 CREATE TABLE IF NOT EXISTS classes (
+    email VARCHAR(100),
     class_code VARCHAR(20) PRIMARY KEY, -- Ví dụ: ITK46A, ITK47C
     class_name VARCHAR(100) NOT NULL,
     teacher_id INT REFERENCES teachers(id) ON DELETE SET NULL, -- GVCN phụ trách
@@ -50,6 +51,10 @@ CREATE TABLE students (
 
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
+    task_type VARCHAR(50),
+    ref_doc_number VARCHAR(50), 
+    ref_issue_date TIMESTAMP, 
+    remind_before_days INT,
     id SERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,          -- Tiêu đề công việc
     content TEXT,                         -- Trích yếu / Nội dung chi tiết
@@ -96,6 +101,8 @@ CREATE TABLE IF NOT EXISTS task_attachments (
 
 ```sql
 CREATE TABLE IF NOT EXISTS email_reminders (
+    send_type VARCHAR(50),
+    kind VARCHAR(50),
     id SERIAL PRIMARY KEY,
     task_id INT REFERENCES tasks(id) ON DELETE CASCADE,
     recipient_email VARCHAR(100) NOT NULL,
@@ -109,6 +116,42 @@ CREATE TABLE IF NOT EXISTS email_reminders (
 );
 ```
 
+## 8. Bảng quản lý tài khoản Admin
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(20) DEFAULT 'admin',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+## 9. Bảng quản lý người nhận thông báo công việc (chủ trì / phối hợp)
+
+```sql
+CREATE TABLE IF NOT EXISTS task_recipients (
+    id SERIAL PRIMARY KEY,
+    task_id INT REFERENCES tasks(id) ON DELETE CASCADE,
+    recipient_email VARCHAR(100) NOT NULL,
+    recipient_name VARCHAR(100),
+    recipient_group VARCHAR(100),
+    kind VARCHAR(50), -- loại: chủ trì, phối hợp...
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+## 10. Bảng danh bạ CC (các khoa, ban giám hiệu,...)
+
+```sql
+CREATE TABLE IF NOT EXISTS cc_contacts (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+```
 ---
 
 ## Dữ liệu mẫu (Sample Data)
