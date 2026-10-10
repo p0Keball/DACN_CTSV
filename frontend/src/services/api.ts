@@ -65,7 +65,7 @@ export const updateStudent = async (studentId: string, data: Record<string, unkn
 export const deleteStudent = async (studentId: string) => (await axios.delete(`${API_BASE_URL}/students/${studentId}`)).data;
 
 // Quản lý Công việc
-export const getTasks = async () => (await axios.get(`${API_BASE_URL}/tasks`)).data;
+export const getTasks = async (params?: object) => (await axios.get(`${API_BASE_URL}/tasks`, { params })).data;
 export const getTask = async (id: number) => (await axios.get(`${API_BASE_URL}/tasks/${id}`)).data;
 export const addTask = async (data: Record<string, unknown>) => (await axios.post(`${API_BASE_URL}/tasks`, data)).data;
 export const updateTask = async (id: number, data: Record<string, unknown>) => (await axios.put(`${API_BASE_URL}/tasks/${id}`, data)).data;

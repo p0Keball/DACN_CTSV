@@ -334,9 +334,21 @@ app.delete('/api/students/:id', async (req, res) => {
 });
 
 // === CRUD CÔNG VIỆC (TASKS) ===
+// Mới soạn lên đầu (created_at DESC). Lọc cộng dồn: ?search= (tiêu đề),
+// ?month=YYYY-MM (tháng deadline), ?assigned=1|0 (có/không phân công SV).
 app.get('/api/tasks', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM tasks ORDER BY deadline ASC');
+    const { search, month, assigned } = req.query;
+    const conds = [];
+    const params = [];
+    if (search) { params.push(`%${search}%`); conds.push(`t.title ILIKE $${params.length}`); }
+    if (month) { params.push(month); conds.push(`to_char(t.deadline, 'YYYY-MM') = $${params.length}`); }
+    if (assigned === '1') conds.push(`EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = t.id)`);
+    else if (assigned === '0') conds.push(`NOT EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = t.id)`);
+    const result = await pool.query(
+      `SELECT t.* FROM tasks t${conds.length ? ` WHERE ${conds.join(' AND ')}` : ''} ORDER BY t.created_at DESC, t.id DESC`,
+      params
+    );
     res.json({ success: true, data: result.rows });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });

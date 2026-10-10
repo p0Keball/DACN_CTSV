@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Table, Button, Space, Card, message, Popconfirm, Tag, Divider, Drawer, Tabs, Descriptions, Select } from 'antd';
+import { Table, Button, Space, Card, message, Popconfirm, Tag, Divider, Drawer, Tabs, Descriptions, Select, Input, DatePicker } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import DOMPurify from 'dompurify';
@@ -40,6 +40,16 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
   const taskIdParam = searchParams.get('taskId');
   const autoOpened = useRef<string | null>(null);
 
+  // Bộ lọc toolbar (lọc ở backend, cộng dồn): tên + tháng deadline + có/không phân công
+  const [fSearch, setFSearch] = useState('');
+  const [fKeyword, setFKeyword] = useState('');
+  const [fMonth, setFMonth] = useState<string | null>(null);
+  const [fAssigned, setFAssigned] = useState('all');
+  useEffect(() => {
+    const t = window.setTimeout(() => setFKeyword(fSearch.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [fSearch]);
+
   const filteredTasks = tasks.filter(task => {
     const matchSearch = (task.title || '').toLowerCase().includes(searchKeyword);
     const matchHk = filterHk ? (task.semester || '').includes(filterHk) : true;
@@ -48,9 +58,13 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
   });
 
   const loadTasks = useCallback(async () => {
-    const res = await getTasks();
+    const res = await getTasks({
+      ...(fKeyword ? { search: fKeyword } : {}),
+      ...(fMonth ? { month: fMonth } : {}),
+      ...(fAssigned !== 'all' ? { assigned: fAssigned } : {}),
+    });
     if (res.success) setTasks(res.data);
-  }, []);
+  }, [fKeyword, fMonth, fAssigned]);
 
   useEffect(() => {
     let isMounted = true;
@@ -140,25 +154,63 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
       }
     },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color={statusColor(status)}>{status}</Tag> },
-    { title: 'Thao tác', key: 'action', width: '20%', render: (_: unknown, record: Task) => (
+    { title: 'Thao tác', key: 'action', width: '12%', render: (_: unknown, record: Task) => (
         <Space size="middle">
-          <Button type="link" icon={<FileTextOutlined />} onClick={() => openAssignDrawer(record)}>Chi tiết</Button>
-          <Button type="link" icon={<EditOutlined />} onClick={() => onEdit(record)} />
+          <Button type="link" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); onEdit(record); }} />
           <Popconfirm title="Xóa công việc này?" onConfirm={() => handleDelete(record.id)}>
-            <Button type="link" danger icon={<DeleteOutlined />} />
+            <Button type="link" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
           </Popconfirm>
         </Space>
       )
     }
   ];
 
+  // Bấm vào hàng mở Drawer chi tiết (thay nút Chi tiết); bấm nút/select/input thì không
+  const handleRowClick = (record: Task) => (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, .ant-select, .ant-picker, .ant-popover, .ant-modal')) return;
+    openAssignDrawer(record);
+  };
+
   return (
     <div>
       <Card style={{ borderRadius: '8px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={onNew} style={{ marginBottom: 16 }}>
-          Soạn công việc mới
-        </Button>
-        <Table columns={columns} dataSource={filteredTasks} rowKey="id" pagination={{ pageSize: 10 }} />
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={onNew}>
+            Soạn công việc mới
+          </Button>
+          <Input.Search
+            style={{ width: 240 }}
+            placeholder="Tìm theo tên công việc..."
+            value={fSearch}
+            onChange={e => setFSearch(e.target.value)}
+            allowClear
+          />
+          <DatePicker
+            picker="month"
+            placeholder="Tháng deadline"
+            format="MM/YYYY"
+            onChange={(v) => setFMonth(v ? v.format('YYYY-MM') : null)}
+            allowClear
+          />
+          <Select
+            style={{ width: 190 }}
+            value={fAssigned}
+            onChange={setFAssigned}
+            options={[
+              { value: 'all', label: 'Mọi công việc' },
+              { value: '1', label: 'Có phân công SV' },
+              { value: '0', label: 'Chưa phân công' },
+            ]}
+          />
+        </Space>
+        <Table
+          columns={columns}
+          dataSource={filteredTasks}
+          rowKey="id"
+          pagination={{ pageSize: 10 }}
+          onRow={(record) => ({ onClick: handleRowClick(record), style: { cursor: 'pointer' } })}
+        />
       </Card>
 
       {/* DRAWER CHI TIẾT: email + lịch sử gửi */}

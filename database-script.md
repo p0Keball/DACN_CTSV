@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     content TEXT,                         -- Trích yếu / Nội dung chi tiết
     deadline TIMESTAMP WITH TIME ZONE,    -- Thời hạn xử lý / Thời gian diễn ra
     priority VARCHAR(20) DEFAULT 'Bình thường', -- Thấp, Bình thường, Cao
-    status VARCHAR(30) DEFAULT 'Mới',     -- Mới, Đang xử lý, Chờ phản hồi, Kết thúc, Quá hạn
+    status VARCHAR(30) DEFAULT 'Mới tạo', -- Vòng đời email (§3.1): Mới tạo, Đã soạn, Đã gửi, Chờ phản hồi, Đang xử lý, Kết thúc, Quá hạn
     source VARCHAR(50) DEFAULT 'Thủ công', -- E-Office, Thủ công, OCR PDF
     semester VARCHAR(20),                 -- Học kỳ (VD: HK1 2026-2027)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS task_assignments (
     task_id INT REFERENCES tasks(id) ON DELETE CASCADE,
     student_id VARCHAR(20) REFERENCES students(student_id) ON DELETE CASCADE,
     class_code VARCHAR(20) REFERENCES classes(class_code) ON DELETE CASCADE,
-    status VARCHAR(30) DEFAULT 'Được phân công', -- Được phân công, Đã tham gia, Vắng
+    status VARCHAR(30) DEFAULT 'Được phân công', -- Được phân công, Đã xác nhận, Đã tham gia, Vắng
     note TEXT,                            -- Ghi chú/Thành tích
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(task_id, student_id)           -- Một SV không bị phân công trùng 1 sự kiện

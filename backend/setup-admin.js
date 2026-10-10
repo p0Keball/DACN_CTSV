@@ -9,7 +9,7 @@ const pool = new Pool({
 
 async function setup() {
   try {
-    // To bng nu cha cA3
+    // Tạo bảng users nếu chưa có
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -27,11 +27,11 @@ async function setup() {
       ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash
     `, [passwordHash]);
 
-    console.log('Ti khon admin `A `c kh?i to/c-p nh-t!');
+    console.log('Tài khoản admin đã được khởi tạo/cập nhật!');
     console.log('Username: admin');
     console.log('Password: admin123');
   } catch (err) {
-    console.error('L"i:', err);
+    console.error('Lỗi:', err);
   } finally {
     pool.end();
   }

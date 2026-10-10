@@ -29,8 +29,7 @@ Root `package-lock.json` is empty — always run inside `backend/` or `frontend/
 
 - API shape is always `{ success, data?, message? }`. DB columns are `snake_case`, but `GET /api/students` aliases to PascalCase (`StudentID`, `FirstName`, …) to match DLU payloads — keep this mapping; `POST/PUT /api/students` also expects PascalCase keys.
 - `POST /api/students/sync` requires one concrete `classId`; it 400s on empty/`'all'`. It upserts `classes` then `students` (`ON CONFLICT DO UPDATE`).
-- Duplicate `GET /api/tasks` exists in `server.js` (~line 118 and ~line 295); the later registration (`ORDER BY deadline ASC`) wins. Remove the dead one when touching tasks.
-- Task status/priority strings are Vietnamese literals (`'Mới'`, `'Đang xử lý'`, `'Hoàn thành'`, `'Bình thường'`, `'Cao'`); stats query in `/api/tasks/stats` depends on them — don't rename without updating SQL.
+- Task status/priority strings are Vietnamese literals — status lifecycle (§3.1): `'Mới tạo'`, `'Đã soạn'`, `'Đã gửi'`, `'Chờ phản hồi'`, `'Đang xử lý'`, `'Kết thúc'`, `'Quá hạn'`; priority: `'Cao'`, `'Bình thường'`, `'Thấp'`. Stats/report queries in `server.js` depend on them — don't rename without updating SQL + UI (`STATUS_OPTIONS`, charts). Legacy rows may still carry `'Hoàn thành'` or `'Mới'`; migrate once: `UPDATE tasks SET status='Kết thúc' WHERE status='Hoàn thành'`.
 - Attachments: uploads saved to `backend/src/uploads/` (not gitignored, served statically at `/uploads`). Multer filename fix `Buffer.from(name,'latin1').toString('utf8')` preserves Vietnamese names — keep it on any new upload path.
 - Frontend: AntD primary color `#237804` set in `App.tsx` `ConfigProvider`; keep. Excel export lives in `utils/exportExcel.ts` (uses `xlsx` from SheetJS CDN URL, not npm registry — don't "fix" the dependency).
 
