@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   Table, Input, Select, Button, Tag, Space, Card, message, Modal, 
-  Descriptions, Badge, Tabs, Form, Popconfirm, Divider, List 
+  Descriptions, Badge, Tabs, Form, Popconfirm, Divider, List,
+  Progress, Spin, Empty
 } from 'antd';
-import { 
-  PlusOutlined, EditOutlined, DeleteOutlined, 
+import {
+  PlusOutlined, EditOutlined, DeleteOutlined,
   SearchOutlined, DownloadOutlined, SyncOutlined, MailOutlined,
   PaperClipOutlined, SendOutlined
 } from '@ant-design/icons';
@@ -12,7 +13,7 @@ import {
   syncStudentsByClass, getStudents, getTeachers, addTeacher, 
   getClasses, assignTeacherToClass, updateTeacher, deleteTeacher, 
   addClass, updateClass, deleteClass, addStudent, updateStudent, deleteStudent,
-  getTasks, getTaskAttachments
+  getTasks, getTaskAttachments, getStudentAttendance
 } from '../services/api';
 import { exportToExcel } from '../utils/exportExcel';
 
@@ -62,6 +63,21 @@ interface Attachment {
   file_name: string;
   file_url: string;
 }
+
+// 1 đơn vị = 1 bản ghi điểm danh (task đã Hoàn thành / Kết thúc)
+interface AttendanceItem {
+  id: number;
+  task_id: number;
+  assignment_status: string;
+  note?: string | null;
+  title: string;
+  deadline?: string | null;
+  task_status: string;
+  semester?: string | null;
+}
+
+const EMPTY_ATTENDANCE: { total: number; attended: number; absent: number; items: AttendanceItem[] } =
+  { total: 0, attended: 0, absent: 0, items: [] };
 //#endregion
 
 
@@ -80,17 +96,98 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
+  // Điểm danh: chỉ task Hoàn thành / Kết thúc, mỗi bản ghi = 1 đơn vị (có mặt = 1/1, vắng = 0/1)
+  const [attendance, setAttendance] = useState<{ total: number; attended: number; absent: number; items: AttendanceItem[] }>(EMPTY_ATTENDANCE);
+  const [attLoading, setAttLoading] = useState(false);
+  const [attMonth, setAttMonth] = useState<number | null>(null);
+  const [attYear, setAttYear] = useState<number | null>(null);
+
+  const closeStudentPanel = useCallback(() => {
+    setSelectedStudent(null);
+    setAttendance(EMPTY_ATTENDANCE);
+    setAttMonth(null);
+    setAttYear(null);
+  }, []);
+
+  const loadAttendance = useCallback((studentId: string) => {
+    setAttMonth(null);
+    setAttYear(null);
+    setAttLoading(true);
+    getStudentAttendance(studentId)
+      .then((res) => {
+        if (res.success) {
+          setAttendance(res.data);
+          // Mặc định chọn tháng/năm mới nhất có dữ liệu
+          const dated = (res.data.items as AttendanceItem[]).filter((it) => it.deadline);
+          if (dated.length > 0) {
+            const latest = dated
+              .map((it) => new Date(it.deadline as string))
+              .sort((a, b) => b.getTime() - a.getTime())[0];
+            setAttMonth(latest.getMonth() + 1);
+            setAttYear(latest.getFullYear());
+          }
+        }
+      })
+      .catch(() => setAttendance(EMPTY_ATTENDANCE))
+      .finally(() => setAttLoading(false));
+  }, []);
+
+  // Nhóm công việc theo tháng/năm từ deadline (mỗi công việc = 1 dòng: thời gian • tên • 1/1 hoặc 0/1)
+  const attYears = useMemo(() => {
+    const s = new Set<number>();
+    attendance.items.forEach((it) => {
+      if (!it.deadline) return;
+      s.add(new Date(it.deadline).getFullYear());
+    });
+    return Array.from(s).sort((a, b) => b - a);
+  }, [attendance.items]);
+
+  const attMonthsOfYear = useMemo(() => {
+    if (attYear == null) return [] as number[];
+    const s = new Set<number>();
+    attendance.items.forEach((it) => {
+      if (!it.deadline) return;
+      const d = new Date(it.deadline);
+      if (d.getFullYear() === attYear) s.add(d.getMonth() + 1);
+    });
+    return Array.from(s).sort((a, b) => a - b);
+  }, [attendance.items, attYear]);
+
+  // Công việc của tháng đang chọn (mới nhất trước) — mỗi dòng hiển thị độc lập 1/1 hoặc 0/1
+  const attMonthItems = useMemo(() => {
+    if (attMonth == null || attYear == null) return [] as AttendanceItem[];
+    return attendance.items
+      .filter((it) => {
+        if (!it.deadline) return false;
+        const d = new Date(it.deadline);
+        return d.getMonth() + 1 === attMonth && d.getFullYear() === attYear;
+      })
+      .sort((a, b) => new Date(b.deadline as string).getTime() - new Date(a.deadline as string).getTime());
+  }, [attendance.items, attMonth, attYear]);
+
+  // Tử/mẫu cộng dồn cho thanh tiến độ: load động theo tháng đang chọn, chưa chọn thì dùng tổng
+  const attProgress = useMemo(() => {
+    if (attMonth != null && attYear != null) {
+      const numer = attMonthItems.filter((it) => it.assignment_status === 'Đã tham gia').length;
+      return { numer, denom: attMonthItems.length };
+    }
+    return { numer: attendance.attended, denom: attendance.total };
+  }, [attendance.attended, attendance.total, attMonth, attYear, attMonthItems]);
+
   // Click ra ngoài cụm bảng + chi tiết thì đóng panel, bảng về full như cũ
+  // Bỏ qua click trong portal của antd (dropdown Select...) để chọn Tháng/Năm không bị thoát panel
   useEffect(() => {
     if (!selectedStudent) return;
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setSelectedStudent(null);
+      const target = e.target as HTMLElement;
+      if (target.closest('.ant-select-dropdown, .ant-dropdown, .ant-picker-dropdown, .ant-modal-wrap, .ant-message, .ant-notification')) return;
+      if (wrapRef.current && !wrapRef.current.contains(target)) {
+        closeStudentPanel();
       }
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [selectedStudent]);
+  }, [selectedStudent, closeStudentPanel]);
 
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
@@ -284,7 +381,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
     try {
       await deleteStudent(id);
       message.success('Đã xóa sinh viên');
-      setSelectedStudent(null);
+      closeStudentPanel();
       loadStudents();
     } catch {
       message.error('Có lỗi xảy ra khi xóa sinh viên');
@@ -297,7 +394,12 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
     // Bấm vào checkbox chọn dòng thì không toggle panel chi tiết
     const target = e.target as HTMLElement;
     if (target.closest('.ant-checkbox-wrapper, .ant-checkbox, input, button, a')) return;
-    setSelectedStudent((prev) => (prev?.StudentID === record.StudentID ? null : record));
+    if (selectedStudent?.StudentID === record.StudentID) {
+      closeStudentPanel();
+    } else {
+      setSelectedStudent(record);
+      loadAttendance(record.StudentID);
+    }
   };
 
   const fullColumns = [
@@ -362,7 +464,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
           <Card
             size="small"
             title={<span style={{ color: '#237804', fontWeight: 600 }}>Hồ sơ sinh viên</span>}
-            extra={<Button type="text" onClick={() => setSelectedStudent(null)}>Đóng ✕</Button>}
+            extra={<Button type="text" onClick={closeStudentPanel}>Đóng ✕</Button>}
             style={{ flex: '1 1 48%', minWidth: 0, position: 'sticky', top: 0 }}
           >
             <Descriptions bordered column={2} size="small" labelStyle={{ width: '130px', background: '#fafafa', fontWeight: 500 }}>
@@ -377,6 +479,78 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
               <Descriptions.Item label="Nơi sinh" span={2}>{selectedStudent.BirthPlace || '---'}</Descriptions.Item>
               <Descriptions.Item label="Thường trú" span={2}>{selectedStudent.PermanentResidence || '---'}</Descriptions.Item>
             </Descriptions>
+
+            <Divider style={{ fontSize: 13, color: '#237804', margin: '14px 0 8px' }}>
+              {attMonth != null && attYear != null
+                ? `Điểm danh sự kiện ${String(attMonth).padStart(2, '0')}/${attYear}`
+                : 'Điểm danh sự kiện'}
+            </Divider>
+            {attLoading ? (
+              <div style={{ textAlign: 'center', padding: 12 }}><Spin size="small" /></div>
+            ) : attendance.total === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có điểm danh ở công việc Hoàn thành / Kết thúc" style={{ margin: '4px 0 8px' }} />
+            ) : (
+              <div>
+                <Progress
+                  percent={attProgress.denom === 0 ? 0 : Math.round((attProgress.numer / attProgress.denom) * 100)}
+                  format={() => `${attProgress.numer}/${attProgress.denom}`}
+                  strokeColor="#237804"
+                  size="small"
+                />
+                {/* Lọc theo tháng / năm — mỗi tháng load công việc của tháng đó */}
+                <Space style={{ width: '100%', marginBottom: 8 }} size={8}>
+                  <Select
+                    placeholder="Tháng"
+                    value={attMonth}
+                    onChange={setAttMonth}
+                    style={{ width: 110 }}
+                    options={attMonthsOfYear.map((m) => ({ value: m, label: `Tháng ${m}` }))}
+                  />
+                  <Select
+                    placeholder="Năm"
+                    value={attYear}
+                    onChange={(y) => { setAttYear(y); setAttMonth(null); }}
+                    style={{ width: 110 }}
+                    options={attYears.map((y) => ({ value: y, label: `Năm ${y}` }))}
+                  />
+                </Space>
+                {attMonth == null || attYear == null ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chọn tháng và năm để xem công việc" style={{ margin: '4px 0 8px' }} />
+                ) : attMonthItems.length === 0 ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`Tháng ${attMonth}/${attYear} không có công việc`} style={{ margin: '4px 0 8px' }} />
+                ) : (
+                  <List
+                    size="small"
+                    bordered
+                    dataSource={attMonthItems}
+                    renderItem={(it) => {
+                      const attended = it.assignment_status === 'Đã tham gia';
+                      const time = it.deadline
+                        ? new Date(it.deadline).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                        : '---';
+                      const line = `${time} • ${it.title} • ${attended ? '1/1' : '0/1'}`;
+                      return (
+                        <List.Item
+                          style={{ padding: '6px 10px' }}
+                          actions={[
+                            <Tag key="frac" color={attended ? 'green' : 'red'} style={{ margin: 0 }}>
+                              {attended ? '1/1' : '0/1'}
+                            </Tag>,
+                          ]}
+                        >
+                          <div
+                            title={`${it.deadline ? new Date(it.deadline).toLocaleString('vi-VN') : '---'} — ${it.title} — ${attended ? 'Có mặt' : it.assignment_status}`}
+                            style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13, flex: 1, minWidth: 0 }}
+                          >
+                            {line}
+                          </div>
+                        </List.Item>
+                      );
+                    }}
+                  />
+                )}
+              </div>
+            )}
             <Space style={{ marginTop: 12 }}>
               <Button icon={<EditOutlined />} onClick={() => openEditStudent(selectedStudent)}>Sửa</Button>
               <Popconfirm title={`Xóa sinh viên ${selectedStudent.StudentID}?`} onConfirm={() => handleDeleteSingle(selectedStudent.StudentID)}>

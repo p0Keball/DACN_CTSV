@@ -91,12 +91,18 @@ export const addTaskParticipants = async (taskId: number, student_ids: string[])
 export const updateParticipant = async (id: number, data: object) => (await axios.patch(`${API_BASE_URL}/participants/${id}`, data)).data;
 export const deleteParticipant = async (id: number) => (await axios.delete(`${API_BASE_URL}/participants/${id}`)).data;
 
+// Điểm danh 1 SV: chỉ task Hoàn thành / Kết thúc (mỗi bản ghi = 1 đơn vị điểm danh)
+export const getStudentAttendance = async (studentId: string) =>
+  (await axios.get(`${API_BASE_URL}/students/${encodeURIComponent(studentId)}/attendance`)).data;
+
 // Báo cáo tổng hợp (Gói 6, chỉ đọc)
 export const getTaskReport = async (params: { group?: string; from?: string; to?: string }) =>
   (await axios.get(`${API_BASE_URL}/reports/tasks`, { params })).data;
 export const getSemesters = async () => (await axios.get(`${API_BASE_URL}/reports/semesters`)).data;
-export const getParticipation = async (semester?: string) =>
-  (await axios.get(`${API_BASE_URL}/reports/participation`, { params: semester ? { semester } : {} })).data;
+export const getParticipation = async (semester?: string, classCode?: string) =>
+  (await axios.get(`${API_BASE_URL}/reports/participation`, { params: { ...(semester ? { semester } : {}), ...(classCode ? { class_code: classCode } : {}) } })).data;
+export const getParticipationByClass = async (semester?: string) =>
+  (await axios.get(`${API_BASE_URL}/reports/participation-by-class`, { params: semester ? { semester } : {} })).data;
 
 // Tủ hồ sơ (tab Hồ sơ): file gom theo tháng tạo công việc
 export const getFilesLibrary = async () => (await axios.get(`${API_BASE_URL}/files/library`)).data;

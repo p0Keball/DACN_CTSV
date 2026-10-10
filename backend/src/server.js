@@ -599,6 +599,27 @@ app.delete('/api/participants/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
+// === ĐIỂM DANH 1 SINH VIÊN (panel Hồ sơ SV): chỉ task đã Hoàn thành / Kết thúc ===
+// Mỗi bản ghi task_assignments = 1 đơn vị điểm danh. Có mặt = 'Đã tham gia'.
+app.get('/api/students/:id/attendance', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT ta.id, ta.task_id, ta.status AS assignment_status, ta.note,
+              t.title, t.deadline, t.status AS task_status, t.semester
+       FROM task_assignments ta
+       JOIN tasks t ON t.id = ta.task_id
+       WHERE ta.student_id = $1 AND t.status IN ('Hoàn thành', 'Kết thúc')
+       ORDER BY t.deadline DESC NULLS LAST, t.id DESC`,
+      [req.params.id]
+    );
+    const items = result.rows;
+    const total = items.length;
+    const attended = items.filter((r) => r.assignment_status === 'Đã tham gia').length;
+    const absent = items.filter((r) => r.assignment_status === 'Vắng').length;
+    res.json({ success: true, data: { total, attended, absent, items } });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
 // === TỦ HỒ SƠ (tab Hồ sơ): gom file theo tháng tạo công việc ===
 // File vào task_attachments (upload tay, link Drive, sau này sync eOffice)
 // tự hiện ở đây — không cần ghi thêm chỗ nào khác.
@@ -688,9 +709,17 @@ app.get('/api/reports/semesters', async (req, res) => {
 });
 
 // 3. Thống kê rèn luyện theo học kỳ: mỗi SV 1 dòng (join task_assignments + tasks)
+// Dùng cho dòng mở rộng "xem SV trong lớp" (lazy theo class_code để khỏi tải toàn trường).
 app.get('/api/reports/participation', async (req, res) => {
   const semester = req.query.semester || null;
+  const classCode = req.query.class_code || null;
   try {
+    const conds = [];
+    const params = [semester];
+    if (classCode) {
+      params.push(classCode);
+      conds.push(`s.class_id = $${params.length}`);
+    }
     const result = await pool.query(
       `SELECT s.student_id AS "StudentID",
               s.first_name AS "FirstName",
@@ -704,8 +733,36 @@ app.get('/api/reports/participation', async (req, res) => {
          AND ($1::text IS NULL OR EXISTS (
            SELECT 1 FROM tasks t WHERE t.id = ta.task_id AND t.semester = $1
          ))
+       ${conds.length ? `WHERE ${conds.join(' AND ')}` : ''}
        GROUP BY s.student_id, s.first_name, s.last_name, s.class_id
        ORDER BY s.class_id, s.student_id`,
+      params
+    );
+    res.json({ success: true, data: result.rows, semester });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// 4. Thống kê rèn luyện gom theo lớp: mỗi lớp 1 dòng (view chính tab Báo cáo).
+app.get('/api/reports/participation-by-class', async (req, res) => {
+  const semester = req.query.semester || null;
+  try {
+    const result = await pool.query(
+      `SELECT c.class_code AS "ClassCode",
+              c.class_name AS "ClassName",
+              t.full_name AS "TeacherName",
+              COUNT(DISTINCT s.student_id) AS total_students,
+              COUNT(ta.id) AS assigned,
+              COUNT(*) FILTER (WHERE ta.status = 'Đã tham gia') AS participated,
+              COUNT(*) FILTER (WHERE ta.status = 'Vắng') AS absent
+       FROM classes c
+       LEFT JOIN teachers t ON t.id = c.teacher_id
+       LEFT JOIN students s ON s.class_id = c.class_code
+       LEFT JOIN task_assignments ta ON ta.student_id = s.student_id
+         AND ($1::text IS NULL OR EXISTS (
+           SELECT 1 FROM tasks k WHERE k.id = ta.task_id AND k.semester = $1
+         ))
+       GROUP BY c.class_code, c.class_name, t.full_name
+       ORDER BY c.class_code`,
       [semester]
     );
     res.json({ success: true, data: result.rows, semester });
