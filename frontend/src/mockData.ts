@@ -4,7 +4,7 @@ export const statsData = [
   { title: 'Công việc đến hạn', value: 11, change: '+10%', isUp: true, subText: 'so với tuần trước' },
   { title: 'Quá hạn', value: 5, change: '-25%', isUp: false, subText: 'so với tuần trước' },
   { title: 'Hồ sơ chờ xử lý', value: 36, change: '+8%', isUp: true, subText: 'so với tuần trước' },
-  { title: 'Hoàn thành tháng này', value: 72, change: '+15%', isUp: true, subText: 'so với tuần trước' },
+  { title: 'Kết thúc tháng này', value: 72, change: '+15%', isUp: true, subText: 'so với tuần trước' },
 ];
 
 // Dữ liệu cho Biểu đồ cột chồng (Tiến độ công việc theo tuần)
@@ -21,7 +21,7 @@ export const weeklyProgressData = [
 // Dữ liệu cho Biểu đồ tròn (Cơ cấu trạng thái công việc)
 export const taskStatusData = [
   { name: 'Đang xử lý', value: 20, color: '#1677ff' },
-  { name: 'Hoàn thành', value: 18, color: '#52c41a' },
+  { name: 'Kết thúc', value: 18, color: '#52c41a' },
   { name: 'Chờ phản hồi', value: 18, color: '#faad14' },
   { name: 'Mới', value: 18, color: '#ff7a45' },
 ];
@@ -52,7 +52,7 @@ export const studentAttentionData = [
 // Dữ liệu cho Khối "Báo cáo nhanh / Thống kê theo tháng" ở chân trang
 export const monthlyReportData = [
   { title: 'Tổng công việc', value: 120, change: '+18% so với tháng trước', type: 'total' },
-  { title: 'Hoàn thành', value: 72, change: '+15% so với tháng trước', type: 'completed' },
+  { title: 'Kết thúc', value: 72, change: '+15% so với tháng trước', type: 'completed' },
   { title: 'Đang xử lý', value: 38, change: '+8% so với tháng trước', type: 'processing' },
   { title: 'Quá hạn', value: 10, change: '-25% so với tháng trước', type: 'overdue' },
   { title: 'Hồ sơ xử lý', value: 150, change: '+12% so với tháng trước', type: 'pending' },

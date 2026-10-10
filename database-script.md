@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     content TEXT,                         -- Trích yếu / Nội dung chi tiết
     deadline TIMESTAMP WITH TIME ZONE,    -- Thời hạn xử lý / Thời gian diễn ra
     priority VARCHAR(20) DEFAULT 'Bình thường', -- Thấp, Bình thường, Cao
-    status VARCHAR(30) DEFAULT 'Mới',     -- Mới, Đang xử lý, Chờ phản hồi, Hoàn thành, Quá hạn
+    status VARCHAR(30) DEFAULT 'Mới',     -- Mới, Đang xử lý, Chờ phản hồi, Kết thúc, Quá hạn
     source VARCHAR(50) DEFAULT 'Thủ công', -- E-Office, Thủ công, OCR PDF
     semester VARCHAR(20),                 -- Học kỳ (VD: HK1 2026-2027)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

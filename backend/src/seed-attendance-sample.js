@@ -26,8 +26,8 @@ async function main() {
   const ins = await pool.query(
     `INSERT INTO tasks (title, content, deadline, priority, status, source, semester)
      VALUES
-       ('TEST_DIEMDANH_01 Lễ khai giảng (mẫu test)', 'Task Hoàn thành để test điểm danh', NOW() - INTERVAL '10 days', 'Cao', 'Hoàn thành', 'Thủ công', 'HK1 2026-2027'),
-       ('TEST_DIEMDANH_02 Họp lớp tháng 9 (mẫu test)', 'Task Hoàn thành để test điểm danh', NOW() - INTERVAL '5 days', 'Bình thường', 'Hoàn thành', 'Thủ công', 'HK1 2026-2027'),
+       ('TEST_DIEMDANH_01 Lễ khai giảng (mẫu test)', 'Task Kết thúc để test điểm danh', NOW() - INTERVAL '10 days', 'Cao', 'Kết thúc', 'Thủ công', 'HK1 2026-2027'),
+       ('TEST_DIEMDANH_02 Họp lớp tháng 9 (mẫu test)', 'Task Kết thúc để test điểm danh', NOW() - INTERVAL '5 days', 'Bình thường', 'Kết thúc', 'Thủ công', 'HK1 2026-2027'),
        ('TEST_DIEMDANH_03 Ngoại khóa (mẫu test)', 'Task Kết thúc để test điểm danh', NOW() - INTERVAL '2 days', 'Bình thường', 'Kết thúc', 'Thủ công', 'HK1 2026-2027'),
        ('TEST_DIEMDANH_04 Chưa diễn ra (đối chứng)', 'Task Đang xử lý — panel điểm danh phải ẨN task này', NOW() + INTERVAL '5 days', 'Bình thường', 'Đang xử lý', 'Thủ công', 'HK1 2026-2027')
      RETURNING id, title, status`
@@ -57,7 +57,7 @@ async function main() {
     const r = await pool.query(
       `SELECT t.title, t.status AS task_status, ta.status AS assignment_status
        FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
-       WHERE ta.student_id = $1 AND t.status IN ('Hoàn thành', 'Kết thúc')
+       WHERE ta.student_id = $1 AND t.status = 'Kết thúc'
        ORDER BY t.deadline DESC`,
       [sv.student_id]
     );

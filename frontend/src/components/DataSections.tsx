@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
-import { Tag, Popover, Button, List, Empty } from 'antd';
+import { Tag, Popover, Button, List, Empty, Typography } from 'antd';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 
 interface TaskItem {
   id: number;
@@ -29,12 +30,18 @@ const fmtTime = (iso: string) => {
 const priorityColor = (p: string) =>
   p === 'Cao' ? 'red' : p === 'Bình thường' ? 'orange' : 'green';
 const statusColor = (s: string) =>
-  s === 'Hoàn thành' ? 'success' : s === 'Đang xử lý' ? 'processing' : 'default';
+  s === 'Kết thúc' ? 'success' : s === 'Đang xử lý' ? 'processing' : 'default';
 
 // Khối "Công việc gần đây": 2 cột — trái là lịch tháng này,
 // di chuột / bấm vào ô ngày thì cột phải hiện công việc của ngày đó.
 const DataSections: React.FC<DataSectionsProps> = ({ tasks = [] }) => {
+  const navigate = useNavigate();
   const today = new Date();
+  // Bấm tên công việc → sang tab Công việc và mở Drawer chi tiết
+  const openTaskDetail = (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    navigate(`/cong-viec?taskId=${id}`);
+  };
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [active, setActive] = useState({ y: today.getFullYear(), m: today.getMonth(), d: today.getDate() });
@@ -94,7 +101,9 @@ const DataSections: React.FC<DataSectionsProps> = ({ tasks = [] }) => {
         renderItem={(t) => (
           <List.Item key={t.id} style={{ padding: '4px 0' }}>
             <div>
-              <div style={{ fontWeight: 500 }}>{t.title}</div>
+              <Typography.Link onClick={(e) => openTaskDetail(e, t.id)} title="Xem chi tiết công việc">
+                {t.title}
+              </Typography.Link>
               <div style={{ marginTop: 2 }}>
                 <Tag color={priorityColor(t.priority)}>{t.priority || '—'}</Tag>
                 <Tag color={statusColor(t.status)}>{t.status || '—'}</Tag>
@@ -174,9 +183,14 @@ const DataSections: React.FC<DataSectionsProps> = ({ tasks = [] }) => {
                       ))}
                     </div>
                     {list.length > 0 && (
-                      <div style={{ fontSize: 10, color: '#595959', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                      <Typography.Link
+                        ellipsis
+                        onClick={(e) => openTaskDetail(e, list[0].id)}
+                        title={`${list[0].title} — xem chi tiết`}
+                        style={{ fontSize: 10, maxWidth: '100%' }}
+                      >
                         {list[0].title}
-                      </div>
+                      </Typography.Link>
                     )}
                     {list.length > 1 && <div style={{ fontSize: 10, color: '#8c8c8c' }}>+{list.length - 1} nữa</div>}
                   </div>
@@ -203,7 +217,9 @@ const DataSections: React.FC<DataSectionsProps> = ({ tasks = [] }) => {
               renderItem={(t) => (
                 <List.Item key={t.id}>
                   <div style={{ width: '100%' }}>
-                    <div style={{ fontWeight: 600 }}>{t.title}</div>
+                    <Typography.Link onClick={(e) => openTaskDetail(e, t.id)} title="Xem chi tiết công việc" style={{ fontWeight: 600 }}>
+                      {t.title}
+                    </Typography.Link>
                     <div style={{ marginTop: 4, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       <Tag color={priorityColor(t.priority)}>{t.priority || '—'}</Tag>
                       <Tag color={statusColor(t.status)}>{t.status || '—'}</Tag>

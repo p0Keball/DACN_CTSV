@@ -38,7 +38,7 @@ const StatisticCard: React.FC<StatisticCardProps> = ({ stats }) => {
         <h2 style={{ margin: 0, fontSize: '28px', color: '#f5222d' }}>{stats?.overdue ?? 0}</h2>
       </div>
       <div style={cardStyle}>
-        <span style={{ color: '#8c8c8c', fontSize: '14px' }}>Hoàn thành</span>
+        <span style={{ color: '#8c8c8c', fontSize: '14px' }}>Kết thúc</span>
         <h2 style={{ margin: 0, fontSize: '28px', color: '#52c41a' }}>{stats?.completed ?? 0}</h2>
       </div>
     </div>

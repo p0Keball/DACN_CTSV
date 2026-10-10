@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Table, Button, Space, Card, message, Popconfirm, Tag, Divider, Drawer, Tabs, Descriptions, Select } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -8,7 +8,7 @@ import {
   getTaskAttachments, getTaskRecipients, getTaskHistory,
   getTaskParticipants, updateParticipant, deleteParticipant,
 } from '../services/api';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { statusColor, PARTICIPANT_STATUSES } from '../types';
 import type { Task, Recipient, Attachment, HistoryRow, Participant } from '../types';
 
@@ -31,10 +31,14 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
   const [participants, setParticipants] = useState<Participant[]>([]);
 
   const location = useLocation();
+  const navigate = useNavigate();
   const searchParams = new URLSearchParams(location.search);
   const searchKeyword = searchParams.get('search')?.toLowerCase() || '';
   const filterHk = searchParams.get('hk') || '';
   const filterYear = searchParams.get('year') || '';
+  // Deep-link từ Lịch / Hồ sơ SV / Thông báo: ?taskId=... → tự mở Drawer chi tiết
+  const taskIdParam = searchParams.get('taskId');
+  const autoOpened = useRef<string | null>(null);
 
   const filteredTasks = tasks.filter(task => {
     const matchSearch = (task.title || '').toLowerCase().includes(searchKeyword);
@@ -55,7 +59,7 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
     return () => { isMounted = false; };
   }, [loadTasks, refreshToken]);
 
-  const openAssignDrawer = async (record: Task) => {
+  const openAssignDrawer = useCallback(async (record: Task) => {
     setCurrentAssignTask(record);
     setIsAssignVisible(true);
     try {
@@ -68,6 +72,29 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
       if (his.success) setHistory(his.data);
       if (part.success) setParticipants(part.data);
     } catch { message.error('Không tải được chi tiết công việc'); }
+  }, []);
+
+  // ?taskId=... (từ Lịch / Hồ sơ SV / chuông thông báo) → mở Drawer khi bảng đã tải xong
+  useEffect(() => {
+    if (!taskIdParam) { autoOpened.current = null; return; }
+    if (autoOpened.current === taskIdParam) return;
+    const found = tasks.find(t => String(t.id) === taskIdParam);
+    if (!found) return;
+    autoOpened.current = taskIdParam;
+    Promise.resolve()
+      .then(() => openAssignDrawer(found))
+      .catch(() => undefined);
+  }, [taskIdParam, tasks, openAssignDrawer]);
+
+  // Đóng Drawer thì gỡ taskId khỏi URL để bấm lại link đó vẫn mở được
+  const closeAssignDrawer = () => {
+    setIsAssignVisible(false);
+    if (taskIdParam) {
+      const sp = new URLSearchParams(location.search);
+      sp.delete('taskId');
+      const search = sp.toString();
+      navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    }
   };
 
   const reloadParticipants = async (taskId: number) => {
@@ -138,7 +165,7 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
       <Drawer
         title={currentAssignTask ? `Công việc: ${currentAssignTask.title}` : 'Chi tiết công việc'}
         size={860}
-        onClose={() => setIsAssignVisible(false)}
+        onClose={closeAssignDrawer}
         open={isAssignVisible}
         destroyOnHidden
       >

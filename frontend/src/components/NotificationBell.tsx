@@ -76,7 +76,7 @@ const NotificationBell: React.FC = () => {
     const now = dayjs();
     const list: Notif[] = [];
     for (const t of tasks) {
-      const done = t.status === 'Hoàn thành';
+      const done = t.status === 'Kết thúc';
       const dl = t.deadline ? dayjs(t.deadline) : null;
       if (!done && dl?.isValid()) {
         if (dl.isBefore(now)) {

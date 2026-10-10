@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { 
-  Table, Input, Select, Button, Tag, Space, Card, message, Modal, 
+import {
+  Table, Input, Select, Button, Tag, Space, Card, message, Modal,
   Descriptions, Badge, Tabs, Form, Popconfirm, Divider, List,
-  Progress, Spin, Empty
+  Progress, Spin, Empty, Typography
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
@@ -16,6 +16,7 @@ import {
   getTasks, getTaskAttachments, getStudentAttendance
 } from '../services/api';
 import { exportToExcel } from '../utils/exportExcel';
+import { useNavigate } from 'react-router-dom';
 
 const { Option } = Select;
 
@@ -64,7 +65,7 @@ interface Attachment {
   file_url: string;
 }
 
-// 1 đơn vị = 1 bản ghi điểm danh (task đã Hoàn thành / Kết thúc)
+// 1 đơn vị = 1 bản ghi điểm danh (task đã Kết thúc)
 interface AttendanceItem {
   id: number;
   task_id: number;
@@ -89,6 +90,7 @@ interface StudentListProps {
 }
 
 const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, onExportAction }) => {
+  const navigate = useNavigate();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
@@ -96,7 +98,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Điểm danh: chỉ task Hoàn thành / Kết thúc, mỗi bản ghi = 1 đơn vị (có mặt = 1/1, vắng = 0/1)
+  // Điểm danh: chỉ task Kết thúc, mỗi bản ghi = 1 đơn vị (có mặt = 1/1, vắng = 0/1)
   const [attendance, setAttendance] = useState<{ total: number; attended: number; absent: number; items: AttendanceItem[] }>(EMPTY_ATTENDANCE);
   const [attLoading, setAttLoading] = useState(false);
   const [attMonth, setAttMonth] = useState<number | null>(null);
@@ -488,7 +490,7 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
             {attLoading ? (
               <div style={{ textAlign: 'center', padding: 12 }}><Spin size="small" /></div>
             ) : attendance.total === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có điểm danh ở công việc Hoàn thành / Kết thúc" style={{ margin: '4px 0 8px' }} />
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có điểm danh ở công việc Kết thúc" style={{ margin: '4px 0 8px' }} />
             ) : (
               <div>
                 <Progress
@@ -528,7 +530,6 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
                       const time = it.deadline
                         ? new Date(it.deadline).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })
                         : '---';
-                      const line = `${time} • ${it.title} • ${attended ? '1/1' : '0/1'}`;
                       return (
                         <List.Item
                           style={{ padding: '6px 10px' }}
@@ -540,9 +541,18 @@ const StudentList: React.FC<StudentListProps> = ({ searchText, selectedClass, on
                         >
                           <div
                             title={`${it.deadline ? new Date(it.deadline).toLocaleString('vi-VN') : '---'} — ${it.title} — ${attended ? 'Có mặt' : it.assignment_status}`}
-                            style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13, flex: 1, minWidth: 0 }}
+                            style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13, flex: 1, minWidth: 0, display: 'flex', gap: 4 }}
                           >
-                            {line}
+                            <span style={{ flexShrink: 0 }}>{time} •</span>
+                            <Typography.Link
+                              ellipsis
+                              title={`${it.title} — xem chi tiết công việc`}
+                              style={{ fontSize: 13, minWidth: 0 }}
+                              onClick={() => navigate(`/cong-viec?taskId=${it.task_id}`)}
+                            >
+                              {it.title}
+                            </Typography.Link>
+                            <span style={{ flexShrink: 0 }}>• {attended ? '1/1' : '0/1'}</span>
                           </div>
                         </List.Item>
                       );

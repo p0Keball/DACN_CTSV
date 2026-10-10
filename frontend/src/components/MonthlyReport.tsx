@@ -29,10 +29,10 @@ const MonthlyReport: React.FC<MonthlyReportProps> = ({ tasks = [] }) => {
 
     return {
       total: tasksThisMonth.length,
-      completed: tasksThisMonth.filter(t => t.status === 'Hoàn thành').length,
+      completed: tasksThisMonth.filter(t => t.status === 'Kết thúc').length,
       processing: tasksThisMonth.filter(t => t.status === 'Đang xử lý').length,
       overdue: tasksThisMonth.filter(t => {
-        if (t.status === 'Hoàn thành' || !t.deadline) return false;
+        if (t.status === 'Kết thúc' || !t.deadline) return false;
         return new Date(t.deadline) < now;
       }).length
     };
@@ -60,7 +60,7 @@ const MonthlyReport: React.FC<MonthlyReportProps> = ({ tasks = [] }) => {
         </div>
         
         <div style={cardStyle}>
-          <span style={{ color: '#8c8c8c', fontSize: '13px' }}>Hoàn thành</span>
+          <span style={{ color: '#8c8c8c', fontSize: '13px' }}>Kết thúc</span>
           <h2 style={{ margin: 0, fontSize: '24px' }}>{stats.completed}</h2>
         </div>
         

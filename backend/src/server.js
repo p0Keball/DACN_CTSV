@@ -161,22 +161,22 @@ app.post('/api/students/sync', async (req, res) => {
 });
 
 // 2. API lấy thống kê tổng quan số lượng công việc
-// Status chuẩn (§3.1): Mới tạo / Đã soạn / Đã gửi / Chờ phản hồi / Đang xử lý / Hoàn thành / Quá hạn
+// Status chuẩn (§3.1): Mới tạo / Đã soạn / Đã gửi / Chờ phản hồi / Đang xử lý / Kết thúc / Quá hạn
 app.get('/api/tasks/stats', async (req, res) => {
   try {
     const query = `
       SELECT
         COUNT(*) FILTER (WHERE status IN ('Mới', 'Mới tạo', 'Đang xử lý', 'Đã soạn', 'Đã gửi', 'Chờ phản hồi')) AS processing,
         COUNT(*) FILTER (
-          WHERE status != 'Hoàn thành' 
+          WHERE status != 'Kết thúc' 
           AND deadline::date >= CURRENT_DATE 
           AND deadline::date <= CURRENT_DATE + INTERVAL '3 days'
         ) AS pending,
         COUNT(*) FILTER (
-          WHERE status != 'Hoàn thành' 
+          WHERE status != 'Kết thúc' 
           AND deadline::date < CURRENT_DATE
         ) AS overdue,
-        COUNT(*) FILTER (WHERE status = 'Hoàn thành') AS completed
+        COUNT(*) FILTER (WHERE status = 'Kết thúc') AS completed
       FROM tasks;
     `;
     const result = await pool.query(query);
@@ -599,7 +599,7 @@ app.delete('/api/participants/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-// === ĐIỂM DANH 1 SINH VIÊN (panel Hồ sơ SV): chỉ task đã Hoàn thành / Kết thúc ===
+// === ĐIỂM DANH 1 SINH VIÊN (panel Hồ sơ SV): chỉ task đã Kết thúc ===
 // Mỗi bản ghi task_assignments = 1 đơn vị điểm danh. Có mặt = 'Đã tham gia'.
 app.get('/api/students/:id/attendance', async (req, res) => {
   try {
@@ -608,7 +608,7 @@ app.get('/api/students/:id/attendance', async (req, res) => {
               t.title, t.deadline, t.status AS task_status, t.semester
        FROM task_assignments ta
        JOIN tasks t ON t.id = ta.task_id
-       WHERE ta.student_id = $1 AND t.status IN ('Hoàn thành', 'Kết thúc')
+       WHERE ta.student_id = $1 AND t.status = 'Kết thúc'
        ORDER BY t.deadline DESC NULLS LAST, t.id DESC`,
       [req.params.id]
     );
@@ -686,9 +686,9 @@ app.get('/api/reports/tasks', async (req, res) => {
     const result = await pool.query(
       `SELECT to_char(date_trunc('${group}', deadline), 'YYYY-MM-DD') AS period,
               COUNT(*) AS total,
-              COUNT(*) FILTER (WHERE status = 'Hoàn thành') AS completed,
-              COUNT(*) FILTER (WHERE status != 'Hoàn thành' AND deadline < CURRENT_TIMESTAMP) AS overdue,
-              COUNT(*) FILTER (WHERE status != 'Hoàn thành' AND deadline >= CURRENT_TIMESTAMP) AS processing
+              COUNT(*) FILTER (WHERE status = 'Kết thúc') AS completed,
+              COUNT(*) FILTER (WHERE status != 'Kết thúc' AND deadline < CURRENT_TIMESTAMP) AS overdue,
+              COUNT(*) FILTER (WHERE status != 'Kết thúc' AND deadline >= CURRENT_TIMESTAMP) AS processing
        FROM tasks
        WHERE ${conds.join(' AND ')}
        GROUP BY 1 ORDER BY 1`,
@@ -708,14 +708,18 @@ app.get('/api/reports/semesters', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-// 3. Thống kê rèn luyện theo học kỳ: mỗi SV 1 dòng (join task_assignments + tasks)
-// Dùng cho dòng mở rộng "xem SV trong lớp" (lazy theo class_code để khỏi tải toàn trường).
+// 3. Thống kê rèn luyện: mỗi SV 1 dòng (join task_assignments + tasks)
+// Lọc chung theo from/to (deadline) + semester (optional). Khi có bộ lọc thời gian/học kỳ,
+// chỉ trả SV có phân công trong kỳ (HAVING assigned > 0); không lọc thì giữ hành vi cũ (sổ hết).
 app.get('/api/reports/participation', async (req, res) => {
   const semester = req.query.semester || null;
   const classCode = req.query.class_code || null;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  const hasFilter = !!(semester || from || to);
   try {
     const conds = [];
-    const params = [semester];
+    const params = [semester, from, to];
     if (classCode) {
       params.push(classCode);
       conds.push(`s.class_id = $${params.length}`);
@@ -730,21 +734,29 @@ app.get('/api/reports/participation', async (req, res) => {
               COUNT(*) FILTER (WHERE ta.status = 'Vắng') AS absent
        FROM students s
        LEFT JOIN task_assignments ta ON ta.student_id = s.student_id
-         AND ($1::text IS NULL OR EXISTS (
-           SELECT 1 FROM tasks t WHERE t.id = ta.task_id AND t.semester = $1
-         ))
+         AND EXISTS (
+           SELECT 1 FROM tasks t WHERE t.id = ta.task_id
+             AND ($1::text IS NULL OR t.semester = $1)
+             AND ($2::date IS NULL OR t.deadline >= $2)
+             AND ($3::date IS NULL OR t.deadline <= $3)
+         )
        ${conds.length ? `WHERE ${conds.join(' AND ')}` : ''}
        GROUP BY s.student_id, s.first_name, s.last_name, s.class_id
+       ${hasFilter ? 'HAVING COUNT(ta.id) > 0' : ''}
        ORDER BY s.class_id, s.student_id`,
       params
     );
-    res.json({ success: true, data: result.rows, semester });
+    res.json({ success: true, data: result.rows, semester, from, to });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
 // 4. Thống kê rèn luyện gom theo lớp: mỗi lớp 1 dòng (view chính tab Báo cáo).
+// Cùng bộ lọc from/to + semester như mục 3; có lọc thì ẩn lớp assigned = 0.
 app.get('/api/reports/participation-by-class', async (req, res) => {
   const semester = req.query.semester || null;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  const hasFilter = !!(semester || from || to);
   try {
     const result = await pool.query(
       `SELECT c.class_code AS "ClassCode",
@@ -758,14 +770,55 @@ app.get('/api/reports/participation-by-class', async (req, res) => {
        LEFT JOIN teachers t ON t.id = c.teacher_id
        LEFT JOIN students s ON s.class_id = c.class_code
        LEFT JOIN task_assignments ta ON ta.student_id = s.student_id
-         AND ($1::text IS NULL OR EXISTS (
-           SELECT 1 FROM tasks k WHERE k.id = ta.task_id AND k.semester = $1
-         ))
+         AND EXISTS (
+           SELECT 1 FROM tasks k WHERE k.id = ta.task_id
+             AND ($1::text IS NULL OR k.semester = $1)
+             AND ($2::date IS NULL OR k.deadline >= $2)
+             AND ($3::date IS NULL OR k.deadline <= $3)
+         )
        GROUP BY c.class_code, c.class_name, t.full_name
+       ${hasFilter ? 'HAVING COUNT(ta.id) > 0' : ''}
        ORDER BY c.class_code`,
-      [semester]
+      [semester, from, to]
     );
-    res.json({ success: true, data: result.rows, semester });
+    res.json({ success: true, data: result.rows, semester, from, to });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// 5. Hiệu suất công việc trong khoảng thời gian: mỗi việc 1 dòng kèm điểm.
+// Điểm việc i: status 'Kết thúc' thì participated/assigned, ngược lại 0.
+// Hiệu suất kỳ = SUM(điểm) / tổng số việc.
+app.get('/api/reports/performance', async (req, res) => {
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  const semester = req.query.semester || null;
+  try {
+    const conds = ['t.deadline IS NOT NULL'];
+    const params = [];
+    if (from) { params.push(from); conds.push(`t.deadline >= $${params.length}`); }
+    if (to) { params.push(to); conds.push(`t.deadline <= $${params.length}`); }
+    if (semester) { params.push(semester); conds.push(`t.semester = $${params.length}`); }
+    const result = await pool.query(
+      `SELECT t.id, t.title, t.deadline, t.status, t.semester,
+              COUNT(ta.id) AS assigned,
+              COUNT(*) FILTER (WHERE ta.status = 'Đã tham gia') AS participated
+       FROM tasks t
+       LEFT JOIN task_assignments ta ON ta.task_id = t.id
+       WHERE ${conds.join(' AND ')}
+       GROUP BY t.id, t.title, t.deadline, t.status, t.semester
+       ORDER BY t.deadline`,
+      params
+    );
+    const tasks = result.rows.map((r) => {
+      const assigned = Number(r.assigned) || 0;
+      const participated = Number(r.participated) || 0;
+      const score = r.status === 'Kết thúc' && assigned > 0 ? participated / assigned : 0;
+      return { ...r, assigned, participated, score: Math.round(score * 1000) / 1000 };
+    });
+    const total = tasks.length;
+    const totalScore = tasks.reduce((s, r) => s + r.score, 0);
+    const performance = total === 0 ? 0 : Math.round((totalScore / total) * 1000) / 10;
+    res.json({ success: true, data: { tasks, summary: { total, totalScore: Math.round(totalScore * 1000) / 1000, performance } }, from, to, semester });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
