@@ -77,6 +77,35 @@ const upload = multer({
 // Mở public thư mục uploads để Frontend có thể click vào xem/tải file
 app.use('/uploads', express.static(uploadDir));
 
+const crypto = require('crypto');
+const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+// Tên file vật lý từ URL đính kèm (chấp nhận cả raw space lẫn %20)
+const storedNameOf = (url) => {
+  try { return decodeURIComponent(String(url || '').split('/').pop() || ''); }
+  catch { return String(url || '').split('/').pop() || ''; }
+};
+const isLocalUpload = (url) => String(url || '').includes('/uploads/');
+// Xóa file đĩa nếu không còn dòng task_attachments nào trỏ tới
+const unlinkIfOrphan = async (fileUrl, excludeAttachmentId) => {
+  if (!isLocalUpload(fileUrl)) return false;
+  const name = storedNameOf(fileUrl);
+  if (!name) return false;
+  const res = await pool.query(
+    `SELECT COUNT(*) AS n FROM task_attachments
+     WHERE id != $1 AND (file_url = $2 OR file_url LIKE $3 OR file_url LIKE $4)`,
+    [excludeAttachmentId, fileUrl, `%/uploads/${encodeURIComponent(name)}`, `%/uploads/${name}`]
+  );
+  if (Number(res.rows[0].n) > 0) return false;
+  try { fs.unlinkSync(path.join(uploadDir, name)); return true; }
+  catch { return false; }
+};
+// Tìm file cùng nội dung đã lưu (chống trùng)
+const findByHash = async (hash) => {
+  if (!hash) return null;
+  const res = await pool.query('SELECT file_url FROM task_attachments WHERE file_hash = $1 LIMIT 1', [hash]);
+  return res.rows[0]?.file_url || null;
+};
+
 // API đồng bộ sinh viên từ DLU Proxy
 app.post('/api/students/sync', async (req, res) => {
   const { classId } = req.body;
@@ -389,7 +418,9 @@ app.put('/api/tasks/:id', async (req, res) => {
 
 app.delete('/api/tasks/:id', async (req, res) => {
   try {
+    const atts = await pool.query('SELECT id, file_url FROM task_attachments WHERE task_id = $1', [req.params.id]);
     await pool.query('DELETE FROM tasks WHERE id=$1', [req.params.id]);
+    for (const a of atts.rows) await unlinkIfOrphan(a.file_url, a.id); // xóa file đĩa mồ côi theo
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
@@ -414,28 +445,42 @@ app.post('/api/tasks/:taskId/attachments/link', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-// 3. Upload File (PDF, Word) lưu vào local máy
+// 3. Upload File (PDF, Word) lưu vào local máy — trùng nội dung thì tái dùng file cũ
 app.post('/api/tasks/:taskId/attachments/file', upload.array('files'), async (req, res) => {
   try {
     const taskId = req.params.taskId;
     const attachments = [];
-    
+    let deduped = 0;
+
     for (const file of req.files) {
-      const fileUrl = `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
+      const displayName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+      const buffer = fs.readFileSync(file.path);
+      const hash = sha256(buffer);
+      const existingUrl = await findByHash(hash);
+      let fileUrl;
+      if (existingUrl) {
+        fs.unlinkSync(file.path); // trùng nội dung: bỏ file mới, tái dùng file cũ
+        fileUrl = existingUrl;
+        deduped += 1;
+      } else {
+        fileUrl = `${req.protocol}://${req.get('host')}/uploads/${encodeURIComponent(file.filename)}`;
+      }
       const result = await pool.query(
-        'INSERT INTO task_attachments (task_id, file_name, file_url, file_size, file_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        [taskId, Buffer.from(file.originalname, 'latin1').toString('utf8'), fileUrl, file.size.toString(), file.mimetype]
+        'INSERT INTO task_attachments (task_id, file_name, file_url, file_size, file_type, file_hash) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        [taskId, displayName, fileUrl, file.size.toString(), file.mimetype, hash]
       );
       attachments.push(result.rows[0]);
     }
-    res.json({ success: true, data: attachments });
+    res.json({ success: true, data: attachments, deduped });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-// 4. Xóa file đính kèm
+// 4. Xóa file đính kèm (xóa luôn file đĩa nếu thành mồ côi)
 app.delete('/api/attachments/:id', async (req, res) => {
   try {
+    const cur = await pool.query('SELECT file_url FROM task_attachments WHERE id = $1', [req.params.id]);
     await pool.query('DELETE FROM task_attachments WHERE id = $1', [req.params.id]);
+    if (cur.rows[0]) await unlinkIfOrphan(cur.rows[0].file_url, req.params.id);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
@@ -630,6 +675,74 @@ app.get('/api/students/:id/attendance', async (req, res) => {
     const absent = items.filter((r) => r.assignment_status === 'Vắng').length;
     res.json({ success: true, data: { total, attended, absent, items } });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// === ĐỒNG BỘ EOFFICE (§3, luồng B tự động qua adapter) ===
+// Dedupe bằng tasks.eoffice_id (uuid văn bản gốc) — sync lại không nhân đôi.
+const eoffice = require('./services/eoffice.service');
+
+app.get('/api/eoffice/documents', async (req, res) => {
+  try {
+    const { q, page, pageSize, fromDate, toDate, senderName } = req.query;
+    const data = await eoffice.getDocuments({ q, page, pageSize, fromDate, toDate, senderName });
+    res.json({ success: true, data: data.data || [], pageInfo: data.pageInfo || null });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || 'Không lấy được danh sách văn bản eOffice' });
+  }
+});
+
+app.get('/api/eoffice/documents/:id', async (req, res) => {
+  try {
+    const data = await eoffice.getDocumentDetail(req.params.id);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || 'Không lấy được chi tiết văn bản' });
+  }
+});
+
+// Tạo công việc từ 1 văn bản eOffice + tự tải file đính kèm về local
+app.post('/api/eoffice/documents/:id/create-task', async (req, res) => {
+  try {
+    const doc = await eoffice.getDocumentDetail(req.params.id);
+    const existing = await pool.query('SELECT id FROM tasks WHERE eoffice_id = $1', [doc.id]);
+    if (existing.rows.length > 0) {
+      return res.json({ success: true, existed: true, data: { id: existing.rows[0].id } });
+    }
+    const refNo = doc.outboundNumber || doc.documentNumber || '';
+    const title = (doc.summaryText || 'Văn bản eOffice').slice(0, 255);
+    const taskRes = await pool.query(
+      `INSERT INTO tasks (title, content, priority, status, source, task_type, ref_doc_number, ref_issue_date, eoffice_id)
+       VALUES ($1, $2, 'Bình thường', 'Mới tạo', 'E-Office', 'ThongBaoDon', $3, $4, $5) RETURNING *`,
+      [title, doc.summaryText || '', refNo || null, doc.createdAt ? new Date(doc.createdAt) : null, doc.id]
+    );
+    const task = taskRes.rows[0];
+
+    // Tải file đính kèm còn tải được về local (cùng cơ chế upload tay).
+    // Trùng nội dung với file đã có thì tái dùng, không lưu bản mới.
+    let added = 0;
+    const skipped = [];
+    for (const att of doc.attachments || []) {
+      if (!att.available) { skipped.push({ fileName: att.fileName, reason: 'File gốc không còn' }); continue; }
+      try {
+        const { buffer, contentType } = await eoffice.downloadAttachment(doc.id, att.id);
+        const hash = sha256(buffer);
+        let fileUrl = await findByHash(hash);
+        if (!fileUrl) {
+          const safeName = `${Date.now()}-${att.fileName}`;
+          fs.writeFileSync(path.join(uploadDir, safeName), buffer);
+          fileUrl = `${req.protocol}://${req.get('host')}/uploads/${encodeURIComponent(safeName)}`;
+        }
+        await pool.query(
+          'INSERT INTO task_attachments (task_id, file_name, file_url, file_size, file_type, file_hash) VALUES ($1, $2, $3, $4, $5, $6)',
+          [task.id, att.fileName, fileUrl, String(att.sizeBytes ?? buffer.length), contentType || att.extension || 'file', hash]
+        );
+        added += 1;
+      } catch (e) { skipped.push({ fileName: att.fileName, reason: 'Tải thất bại, sync sau thử lại' }); }
+    }
+    res.json({ success: true, existed: false, data: task, attachments: { added, skipped } });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message || 'Không tạo được công việc từ eOffice' });
+  }
 });
 
 // === TỦ HỒ SƠ (tab Hồ sơ): gom file theo tháng tạo công việc ===

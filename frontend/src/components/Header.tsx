@@ -6,6 +6,7 @@ import {
   UserOutlined,
   FolderOutlined,
   BarChartOutlined,
+  InboxOutlined,
   ReadOutlined,
   SettingOutlined,
   UserSwitchOutlined,
@@ -26,6 +27,7 @@ const menuItems = [
   // { key: '/quy-trinh', icon: <ApartmentOutlined />, label: 'Quy trình' },
   { key: '/sinh-vien', icon: <UserOutlined />, label: 'Quản lý đào tạo' },
   { key: '/ho-so', icon: <FolderOutlined />, label: 'Hồ sơ' },
+  { key: '/eoffice', icon: <InboxOutlined />, label: 'eOffice' },
   { key: '/bao-cao', icon: <BarChartOutlined />, label: 'Báo cáo' },
   // { key: '/thong-bao', icon: <BellOutlined />, label: 'Thông báo' },
 ];

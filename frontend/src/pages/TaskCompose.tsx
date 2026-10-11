@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button, Space, Card, Form, Input, InputNumber, Select, DatePicker, message, notification, Tag, Upload, Alert, Spin, Table, Modal } from 'antd';
-import { SendOutlined, SaveOutlined, ArrowLeftOutlined, InboxOutlined, LinkOutlined } from '@ant-design/icons';
+import { SendOutlined, SaveOutlined, ArrowLeftOutlined, InboxOutlined, LinkOutlined, FileTextOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import dayjs from 'dayjs';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -8,11 +8,12 @@ import {
   getTask, getStudents, addTask, updateTask, addTaskAttachmentLink, uploadTaskFiles,
   getTaskRecipients, addTaskRecipient, deleteRecipient, sendTaskEmail, getClasses, getTeachers,
   getTaskParticipants, addTaskParticipants, deleteParticipant,
+  getTaskAttachments, deleteAttachment,
   addTeacher, updateTeacher, deleteTeacher, addClass, updateClass, deleteClass,
   getCcContacts, addCcContact, updateCcContact, deleteCcContact,
 } from '../services/api';
 import { STATUS_OPTIONS, TASK_TYPE_OPTIONS } from '../types';
-import type { Recipient } from '../types';
+import type { Recipient, Attachment } from '../types';
 import EmailEditor from '../components/EmailEditor';
 import DirectoryModal from '../components/DirectoryModal';
 import './TaskCompose.css';
@@ -29,6 +30,35 @@ interface TaskComposeProps {
 }
 
 const { Dragger } = Upload;
+
+// Bóc text từ HTML editor để kiểm tra "có nội dung thật không" (<p></p> tính là trống)
+const stripHtmlText = (s: string) =>
+  s.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+
+const sameStringSet = (a: string[], b: string[]) => {
+  if (a.length !== b.length) return false;
+  const sb = new Set(b);
+  return a.every(x => sb.has(x));
+};
+
+// Chuẩn hóa 1 task/form về cùng shape để so sánh "có thay đổi gì không"
+const snapForm = (t: {
+  title?: unknown; content?: unknown; deadline?: unknown; semester?: unknown;
+  priority?: unknown; source?: unknown; status?: unknown; task_type?: unknown;
+  ref_doc_number?: unknown; ref_issue_date?: unknown; remind_before_days?: unknown;
+}) => ({
+  title: String(t.title || ''),
+  content: String(t.content || ''),
+  deadline: t.deadline ? dayjs(t.deadline as string | Date).toISOString() : null,
+  semester: t.semester || null,
+  priority: t.priority || null,
+  source: t.source || null,
+  status: t.status || null,
+  task_type: t.task_type || null,
+  ref_doc_number: t.ref_doc_number || null,
+  ref_issue_date: t.ref_issue_date ? dayjs(t.ref_issue_date as string | Date).format('YYYY-MM-DD') : null,
+  remind_before_days: t.remind_before_days ?? null,
+});
 
 // Preset "Tất cả GV + Lớp" — danh sách email khoa (cứng trong code; đổi khi nhân sự đổi)
 const PRESET_GV = [
@@ -90,10 +120,9 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
   const [form] = Form.useForm();
   const [sourceWatch, setSourceWatch] = useState<string>('Thủ công');
   const [taskTypeWatch, setTaskTypeWatch] = useState<string>('ThongBaoDon');
-  const [currentStatus, setCurrentStatus] = useState<string>('Mới tạo');
 
   const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [touched, setTouched] = useState(false);
+  const [existingFiles, setExistingFiles] = useState<Attachment[]>([]);
   // Debounce tên tab: ô Tiêu đề gõ vẫn mượt, tên tab cập nhật sau 300ms ngừng gõ
   const titleTimer = useRef<number | null>(null);
   useEffect(() => () => { if (titleTimer.current) window.clearTimeout(titleTimer.current); }, []);
@@ -148,12 +177,32 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
     });
   }, [editingId, ccOn, ccList]);
 
+  // Sửa task chưa có người nhận nào + CC đang bật: tự đưa cụm Cc vào (vd task vừa tạo từ eOffice)
+  const editCcDone = useRef(false);
+  useEffect(() => {
+    ccSeeded.current = false;
+    editCcDone.current = false;
+  }, [editingId]);
+  useEffect(() => {
+    if (!editingId || loading || !ccOn || ccList.length === 0 || editCcDone.current) return;
+    editCcDone.current = true;
+    const ccMails = ccList.filter(c => c.email).map(c => c.email.toLowerCase());
+    setRecipDrafts(prev => {
+      if (prev.length > 0) return prev;
+      return ccList
+        .filter(c => c.email)
+        .map(c => ({ recipient_email: c.email, recipient_name: c.name, recipient_group: 'Ban lãnh đạo', kind: 'cc' }));
+    });
+    // Seed tự động không tính là "người dùng thay đổi" — cập nhật ảnh gốc theo
+    initRecipsRef.current = ccMails;
+  }, [editingId, loading, ccOn, ccList]);
+
   useEffect(() => {
     if (!editingId) return;
     let isMounted = true;
     (async () => {
       try {
-        const [taskRes, recipRes, partRes] = await Promise.all([getTask(editingId), getTaskRecipients(editingId), getTaskParticipants(editingId)]);
+        const [taskRes, recipRes, partRes, attRes] = await Promise.all([getTask(editingId), getTaskRecipients(editingId), getTaskParticipants(editingId), getTaskAttachments(editingId)]);
         if (!isMounted) return;
         const task = taskRes.success ? taskRes.data : null;
         if (!task) { message.error('Không tìm thấy công việc'); stableDone(); return; }
@@ -164,33 +213,78 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
         });
         setSourceWatch(task.source || 'Thủ công');
         setTaskTypeWatch(task.task_type || 'ThongBaoDon');
-        setCurrentStatus(task.status || 'Mới tạo');
-        setTouched(false);
+        initFormRef.current = snapForm(task);
         onTitleRef.current?.(task.title || '');
         onDirtyRef.current?.(false);
-        if (recipRes.success) setRecipDrafts(recipRes.data);
+        if (recipRes.success) {
+          setRecipDrafts(recipRes.data);
+          initRecipsRef.current = recipRes.data.map((r: { recipient_email: string }) => r.recipient_email.toLowerCase());
+        }
+        if (attRes.success) setExistingFiles(attRes.data);
         if (partRes.success) {
           const ids = partRes.data.map((p: { student_id: string }) => p.student_id);
           setSelectedStudents(ids);
+          initSelectedRef.current = [...ids];
           if ((task.task_type || 'ThongBaoDon') === 'ChienDichPhanCong' || ids.length > 0) setAssignOpen(true);
         } else if ((task.task_type || 'ThongBaoDon') === 'ChienDichPhanCong') {
           setAssignOpen(true);
         }
       } catch { message.error('Không tải được công việc'); }
       finally { if (isMounted) setLoading(false); }
+      // Chụp lại ảnh form sau khi editor đồng bộ xong: TipTap chuẩn hóa
+      // text cũ thành <p>…</p> — chụp ngay lúc load sẽ so lệch và hỏi thừa
+      setTimeout(() => {
+        if (!isMounted) return;
+        initFormRef.current = snapForm(form.getFieldsValue());
+        onDirtyRef.current?.(false);
+      }, 300);
     })();
     return () => { isMounted = false; };
   }, [editingId, form, navigate, stableDone]);
 
   const teacherById = (tid: number | null) => teachers.find(t => t.id === tid);
 
-  // Báo dirty về tab cha: đã gõ form, đã thêm người nhận/file/SV phân công
+  // Ảnh lúc mở tab Sửa để so "có thay đổi gì không" (rule đóng tab mới)
+  const initRecipsRef = useRef<string[]>([]);
+  const initSelectedRef = useRef<string[]>([]);
+  const initFormRef = useRef<Record<string, unknown> | null>(null);
+
+  // Luật hỏi xác nhận khi đóng tab: soạn mới = có chữ ở tiêu đề/nội dung;
+  // sửa = form khác lúc mở, hoặc người nhận/file/SV khác lúc mở.
+  const computeConfirmNeeded = () => {
+    const titleTxt = String(form.getFieldValue('title') || '').trim();
+    const bodyTxt = stripHtmlText(String(form.getFieldValue('content') || ''));
+    if (!editingId) return titleTxt !== '' || bodyTxt !== '';
+    const init = initFormRef.current;
+    const formDiffers = !init || JSON.stringify(snapForm(form.getFieldsValue())) !== JSON.stringify(init);
+    const curRecips = recipDrafts.map(r => r.recipient_email.toLowerCase());
+    const curSel = [...selectedStudents];
+    return formDiffers
+      || !sameStringSet(curRecips, initRecipsRef.current)
+      || !sameStringSet(curSel, initSelectedRef.current)
+      || fileList.length > 0;
+  };
+
+  // Báo về tab cha có cần hỏi xác nhận khi đóng tab không (parent tự chặn set trùng)
   useEffect(() => {
-    onDirtyRef.current?.(touched || recipDrafts.length > 0 || fileList.length > 0 || selectedStudents.length > 0);
-  }, [touched, recipDrafts, fileList, selectedStudents]);
+    const titleTxt = String(form.getFieldValue('title') || '').trim();
+    const bodyTxt = stripHtmlText(String(form.getFieldValue('content') || ''));
+    let needed: boolean;
+    if (!editingId) {
+      needed = titleTxt !== '' || bodyTxt !== '';
+    } else {
+      const init = initFormRef.current;
+      needed = !init
+        || JSON.stringify(snapForm(form.getFieldsValue())) !== JSON.stringify(init)
+        || !sameStringSet(recipDrafts.map(r => r.recipient_email.toLowerCase()), initRecipsRef.current)
+        || !sameStringSet([...selectedStudents], initSelectedRef.current)
+        || fileList.length > 0;
+    }
+    onDirtyRef.current?.(needed);
+  }, [editingId, recipDrafts, fileList, selectedStudents, form]);
 
   const handleFormChange = (changed: Record<string, unknown>) => {
-    setTouched(true);
+    onDirtyRef.current?.(computeConfirmNeeded());
     if (changed && typeof changed.title === 'string') {
       const v = changed.title;
       if (titleTimer.current) window.clearTimeout(titleTimer.current);
@@ -388,13 +482,25 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
     message.success('Đã gợi ý nội dung email — bạn sửa lại trước khi gửi');
   };
 
+  const handleDeleteExistingFile = async (id: number) => {
+    const res = await deleteAttachment(id);
+    if (res.success) {
+      message.success('Đã xóa file');
+      setExistingFiles(prev => prev.filter(f => f.id !== id));
+      onDirtyRef.current?.(true); // xóa file là thay đổi (dù đã lưu ngay)
+    } else message.error('Lỗi khi xóa file');
+  };
+
   // persistTask: lưu task + recipients + attachments, trả về taskId
   const persistTask = async (status: string): Promise<number> => {
     const values = await form.validateFields();
     const deadlineValue = values.deadline as unknown as { toISOString: () => string } | null;
     const refDateValue = values.ref_issue_date as unknown as { toISOString?: () => string } | null;
+    // Tiêu đề tối đa 1 xuống dòng + vừa cột VARCHAR(255) của DB
+    const cleanTitle = String(values.title || '').split('\n').slice(0, 2).join('\n').slice(0, 255);
     const payload = {
       ...values,
+      title: cleanTitle,
       deadline: deadlineValue ? (deadlineValue as unknown as { toISOString: () => string }).toISOString() : null,
       ref_issue_date: refDateValue ? dayjs((refDateValue as unknown as { toISOString?: () => string }).toISOString ? (refDateValue as unknown as { toISOString: () => string }).toISOString() : undefined).format('YYYY-MM-DD') : (values.ref_issue_date ? dayjs(values.ref_issue_date).format('YYYY-MM-DD') : null),
       status,
@@ -504,10 +610,32 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
 
   // Chia tags người nhận: cụm To (Giảng viên / Lớp / Khác) + cụm Cc
   const ccDrafts = recipDrafts.filter(r => r.kind === 'cc');
+  // Thu gọn khối To: mỗi khối hiện 3 tags đầu + "+N nữa"; 1 nút bung tất cả. Cc giữ nguyên.
+  const COLLAPSED_N = 3;
+  const [recipExpanded, setRecipExpanded] = useState(false);
+  const renderTags = (list: Recipient[]) => {
+    const shown = recipExpanded ? list : list.slice(0, COLLAPSED_N);
+    return (
+      <>
+        {shown.map(recipTag)}
+        {!recipExpanded && list.length > COLLAPSED_N && (
+          <span style={{ color: '#999', fontSize: 12 }}> +{list.length - COLLAPSED_N} nữa</span>
+        )}
+      </>
+    );
+  };
   const toDrafts = recipDrafts.filter(r => r.kind !== 'cc');
   const gvDrafts = toDrafts.filter(r => r.recipient_group === 'GV');
   const lopDrafts = toDrafts.filter(r => r.recipient_group === 'Lớp');
   const otherDrafts = toDrafts.filter(r => r.recipient_group !== 'GV' && r.recipient_group !== 'Lớp');
+
+  // Cụm nút hành động: render ở header trên + cột trái sticky (cùng hàm, cùng state)
+  const actionButtons = (
+    <>
+      <Button block icon={<SaveOutlined />} loading={saving} onClick={handleSaveDraft}>Lưu nháp</Button>
+      <Button block type="primary" icon={<SendOutlined />} loading={saving} onClick={handleSend}>Gửi</Button>
+    </>
+  );
 
   if (loading) {
     return <div style={{ textAlign: 'center', padding: '50px' }}><Spin size="large" description="Đang tải công việc..." /></div>;
@@ -537,20 +665,6 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
 
   return (
     <div>
-      {/* Sticky header: luôn thấy nút hành động dù cuộn xuống khối nào */}
-      <Card
-        size="small"
-        className="tc-card"
-        style={{ position: 'sticky', top: 0, zIndex: 10, marginBottom: 12 }}
-        styles={{ body: { display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px' } }}
-      >
-        <Button icon={<ArrowLeftOutlined />} onClick={back}>Danh sách</Button>
-        <strong style={{ flex: 1, fontSize: 16 }}>{editingId ? 'Sửa công việc' : 'Soạn công việc mới'}</strong>
-        <Tag color={currentStatus === 'Đã gửi' ? 'cyan' : 'default'}>{currentStatus}</Tag>
-        <Button icon={<SaveOutlined />} loading={saving} onClick={handleSaveDraft}>Lưu nháp</Button>
-        <Button type="primary" icon={<SendOutlined />} loading={saving} onClick={handleSend}>Gửi</Button>
-      </Card>
-
       <Form
         form={form}
         layout="vertical"
@@ -558,8 +672,14 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
         initialValues={{ source: 'Thủ công', task_type: 'ThongBaoDon', priority: 'Bình thường', remind_before_days: 0, semester: 'HK1 2026-2027' }}
       >
         <div className="tc-grid">
-          {/* Cột trái: Nguồn & Loại công việc */}
+          {/* Cột trái sticky: nút hành động luôn thấy khi cuộn + Nguồn & Loại */}
           <div className="tc-source">
+            <Card size="small" className="tc-card" title="Thao tác" style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Button block icon={<ArrowLeftOutlined />} onClick={back}>Danh sách</Button>
+                {actionButtons}
+              </div>
+            </Card>
             <Card size="small" className="tc-card" title="Nguồn & Loại">
               <div className="tc-source-fields">
                 <Form.Item name="source" label="Nguồn công việc">
@@ -595,7 +715,11 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
           <div className="tc-main">
             <Card size="small" className="tc-card" title="Nội dung email">
               <Form.Item name="title" label="Tiêu đề (Subject)" rules={[{ required: true, message: 'Vui lòng nhập tiêu đề' }]}>
-                <Input size="large" placeholder="VD: Huy động SV dự Lễ khai giảng HK1 2026-2027" />
+                <Input.TextArea
+                  rows={2}
+                  placeholder="VD: Huy động SV dự Lễ khai giảng HK1 2026-2027"
+                  style={{ fontSize: 16, fontWeight: 600 }}
+                />
               </Form.Item>
               <Form.Item name="content" noStyle>
                 <EmailEditor />
@@ -630,23 +754,28 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
                 <Input placeholder="Tên (tùy chọn)" value={recipName} onChange={e => setRecipName(e.target.value)} />
                 <Button type="dashed" onClick={addDraftRecipient}>Thêm</Button>
               </Space.Compact>
-              {/* 4 khối chỉ hiện khi có người — mới mở trang thì gọn, thêm vào tự bung và ở luôn */}
+              {/* 4 khối chỉ hiện khi có người; khối To gọn 3 tags đầu, 1 nút bung tất cả */}
+              {recipDrafts.length > COLLAPSED_N && (
+                <Button type="link" size="small" style={{ padding: 0, marginBottom: 4 }} onClick={() => setRecipExpanded(v => !v)}>
+                  {recipExpanded ? 'Thu gọn' : `Mở rộng tất cả (${recipDrafts.length})`}
+                </Button>
+              )}
               {gvDrafts.length > 0 && (
                 <>
                   <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Giảng viên ({gvDrafts.length})</div>
-                  <div style={{ marginBottom: 8 }}>{gvDrafts.map(recipTag)}</div>
+                  <div style={{ marginBottom: 8 }}>{renderTags(gvDrafts)}</div>
                 </>
               )}
               {lopDrafts.length > 0 && (
                 <>
                   <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Lớp ({lopDrafts.length})</div>
-                  <div style={{ marginBottom: 8 }}>{lopDrafts.map(recipTag)}</div>
+                  <div style={{ marginBottom: 8 }}>{renderTags(lopDrafts)}</div>
                 </>
               )}
               {otherDrafts.length > 0 && (
                 <>
                   <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>Khác ({otherDrafts.length})</div>
-                  <div style={{ marginBottom: 4 }}>{otherDrafts.map(recipTag)}</div>
+                  <div style={{ marginBottom: 4 }}>{renderTags(otherDrafts)}</div>
                 </>
               )}
               {ccDrafts.length > 0 && (
@@ -753,15 +882,29 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
                 <Select options={[{ value: 'Cao', label: 'Cao' }, { value: 'Bình thường', label: 'Bình thường' }, { value: 'Thấp', label: 'Thấp' }]} />
               </Form.Item>
               <Form.Item name="status" label="Trạng thái (tự động khi Gửi)" style={{ marginBottom: 0 }}>
-                <Select options={STATUS_OPTIONS.map(s => ({ value: s, label: s }))} onChange={(v) => setCurrentStatus(v)} />
+                <Select options={STATUS_OPTIONS.map(s => ({ value: s, label: s }))} />
               </Form.Item>
             </Card>
 
-            <Card size="small" className="tc-card" title="Tài liệu đính kèm">
+            <Card size="small" className="tc-card" title={`Tài liệu đính kèm (${existingFiles.length + fileList.length})`}>
               <Form.Item name="drive_link" label="Link Google Sheets / Docs">
                 <Input prefix={<LinkOutlined style={{ color: 'rgba(0,0,0,.25)' }} />} placeholder="Dán link..." />
               </Form.Item>
-              <Form.Item label="File đính kèm (PDF, Word, Excel...)" style={{ marginBottom: 0 }}>
+              {/* File đã có của task (upload tay / đồng bộ eOffice): bấm xem ngay, × để xóa */}
+              {existingFiles.length > 0 && (
+                <div style={{ marginBottom: 8, background: '#fafafa', borderRadius: 6, padding: '4px 8px' }}>
+                  {existingFiles.map(f => (
+                    <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: '1px solid #f0f0f0' }}>
+                      <FileTextOutlined style={{ color: '#1677ff' }} />
+                      <a href={f.file_url} target="_blank" rel="noreferrer" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {f.file_name}
+                      </a>
+                      <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteExistingFile(f.id)} />
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Form.Item label="Thêm file (PDF, Word, Excel...)" style={{ marginBottom: 0 }}>
                 <Dragger
                   name="file"
                   multiple={true}

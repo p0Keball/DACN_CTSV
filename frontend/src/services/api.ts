@@ -106,6 +106,11 @@ export const getParticipationByClass = async (semester?: string, extra?: { from?
 export const getPerformance = async (params: { from?: string; to?: string; semester?: string }) =>
   (await axios.get(`${API_BASE_URL}/reports/performance`, { params })).data;
 
+// eOffice (§3, luồng B): văn bản + tạo công việc tự động
+export const getEofficeDocs = async (params: object) => (await axios.get(`${API_BASE_URL}/eoffice/documents`, { params })).data;
+export const getEofficeDoc = async (id: string) => (await axios.get(`${API_BASE_URL}/eoffice/documents/${id}`)).data;
+export const createTaskFromEoffice = async (id: string) => (await axios.post(`${API_BASE_URL}/eoffice/documents/${id}/create-task`)).data;
+
 // Tủ hồ sơ (tab Hồ sơ): file gom theo tháng tạo công việc
 export const getFilesLibrary = async () => (await axios.get(`${API_BASE_URL}/files/library`)).data;
 export const searchFiles = async (params: { q?: string; type?: string; source?: string }) =>

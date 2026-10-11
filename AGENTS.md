@@ -24,13 +24,14 @@ Root `package-lock.json` is empty — always run inside `backend/` or `frontend/
 - Frontend needs no env file: `services/api.ts` uses `VITE_API_URL` or defaults to `http://localhost:5000/api`.
 - DB is remote Supabase — no local migration step; schema changes go in `database-script.md` + applied to Supabase directly.
 - Student source API is hardcoded in `server.js:46` (`POST https://quan-ly-dao-tao-api.nguyentronghieu.io.vn/api/v1/LayDanhSachSinhVienTheoLop`, body `{ Id: classId }`, header `X-API-KEY`). Do not use the old `apidog.io` URL from `yeucau.md`.
+- eOffice (§3, flow B auto): `backend/src/services/eoffice.service.js` adapter (`getDocuments/getDocumentDetail/downloadAttachment`, `EOFFICE_PROVIDER=mock|http`, `EOFFICE_BASE_URL`, no auth on clone API). `tasks.eoffice_id` UNIQUE = dedupe key; `POST /api/eoffice/documents/:id/create-task` creates task + auto-downloads available attachments to local `uploads/`.
 
 ## Conventions & gotchas
 
 - API shape is always `{ success, data?, message? }`. DB columns are `snake_case`, but `GET /api/students` aliases to PascalCase (`StudentID`, `FirstName`, …) to match DLU payloads — keep this mapping; `POST/PUT /api/students` also expects PascalCase keys.
 - `POST /api/students/sync` requires one concrete `classId`; it 400s on empty/`'all'`. It upserts `classes` then `students` (`ON CONFLICT DO UPDATE`).
 - Task status/priority strings are Vietnamese literals — status lifecycle (§3.1): `'Mới tạo'`, `'Đã soạn'`, `'Đã gửi'`, `'Chờ phản hồi'`, `'Đang xử lý'`, `'Kết thúc'`, `'Quá hạn'`; priority: `'Cao'`, `'Bình thường'`, `'Thấp'`. Stats/report queries in `server.js` depend on them — don't rename without updating SQL + UI (`STATUS_OPTIONS`, charts). Legacy rows may still carry `'Hoàn thành'` or `'Mới'`; migrate once: `UPDATE tasks SET status='Kết thúc' WHERE status='Hoàn thành'`.
-- Attachments: uploads saved to `backend/src/uploads/` (not gitignored, served statically at `/uploads`). Multer filename fix `Buffer.from(name,'latin1').toString('utf8')` preserves Vietnamese names — keep it on any new upload path.
+- Attachments: uploads saved to `backend/src/uploads/` (not gitignored, served statically at `/uploads`). Multer filename fix `Buffer.from(name,'latin1').toString('utf8')` preserves Vietnamese names — keep it on any new upload path. Anti-waste: SHA-256 dedupe (`task_attachments.file_hash`) reuses existing file for identical content; deleting an attachment/task unlinks the disk file only when no other row references it (`unlinkIfOrphan`). Audit script pattern: list disk files vs `file_url` basenames to find orphans.
 - Frontend: AntD primary color `#237804` set in `App.tsx` `ConfigProvider`; keep. Excel export lives in `utils/exportExcel.ts` (uses `xlsx` from SheetJS CDN URL, not npm registry — don't "fix" the dependency).
 
 Đọc .env.example để biết cấu hình, không đọc .env
