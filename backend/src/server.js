@@ -7,6 +7,9 @@ const pool = require('./config/db'); // File kết nối PostgreSQL Supabase
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
+const XLSX = require('xlsx');
 
 const app = express();
 app.use(cors());
@@ -742,6 +745,102 @@ app.post('/api/eoffice/documents/:id/create-task', async (req, res) => {
     res.json({ success: true, existed: false, data: task, attachments: { added, skipped } });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, message: err.message || 'Không tạo được công việc từ eOffice' });
+  }
+});
+
+// === AI SOẠN EMAIL TỪ FILE ĐÍNH KÈM (Phase 1: PDF chữ/DOCX, chưa OCR) ===
+// Trích chữ từng file → Gemini viết subject/body → đổ vào editor cho người sửa.
+// POST nên đã cần đăng nhập (đốt quota) nhờ guard chung.
+const readAttachmentText = async (att) => {
+  if (!isLocalUpload(att.file_url)) return { text: '', skipped: 'Link ngoài — không đọc được nội dung' };
+  const full = path.join(uploadDir, storedNameOf(att.file_url));
+  const name = String(att.file_name || '').toLowerCase();
+  try {
+    if (name.endsWith('.pdf')) {
+      const data = await pdfParse(fs.readFileSync(full));
+      const text = (data.text || '').trim();
+      // PDF không chữ (scan/ảnh): gửi thẳng cho AI đọc hình (vision), khỏi OCR cục bộ
+      if (!text) return { text: '', visionFile: full, visionMime: 'application/pdf' };
+      return { text };
+    }
+    if (name.endsWith('.docx')) {
+      const r = await mammoth.extractRawText({ path: full });
+      const text = (r.value || '').trim();
+      if (!text) return { text: '', skipped: 'Không trích được chữ' };
+      return { text };
+    }
+    if (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv')) {
+      try {
+        const wb = XLSX.readFile(full, { codepage: 65001 });
+        const text = wb.SheetNames
+          .map(sn => `--- SHEET: ${sn} ---\n${XLSX.utils.sheet_to_csv(wb.Sheets[sn])}`)
+          .join('\n')
+          .trim();
+        if (!text) return { text: '', skipped: 'File bảng tính trống' };
+        return { text };
+      } catch {
+        return { text: '', skipped: 'Đọc file bảng tính lỗi' };
+      }
+    }
+    if (name.endsWith('.txt')) {
+      return { text: fs.readFileSync(full, 'utf8') };
+    }
+    if (/\.(jpg|jpeg|png|gif|webp)$/.test(name)) {
+      // Ảnh: gửi thẳng cho AI đọc (vision), khỏi OCR cục bộ
+      return { text: '', visionFile: full, visionMime: name.endsWith('.png') ? 'image/png' : name.endsWith('.gif') ? 'image/gif' : name.endsWith('.webp') ? 'image/webp' : 'image/jpeg' };
+    }
+    return { text: '', skipped: 'Định dạng chưa hỗ trợ trích chữ' };
+  } catch {
+    return { text: '', skipped: 'Đọc file lỗi' };
+  }
+};
+
+app.post('/api/tasks/:taskId/draft-email', async (req, res) => {
+  try {
+    const { attachment_ids } = req.body || {};
+    let rows;
+    if (Array.isArray(attachment_ids) && attachment_ids.length > 0) {
+      const r = await pool.query('SELECT * FROM task_attachments WHERE task_id = $1 AND id = ANY($2)', [req.params.taskId, attachment_ids]);
+      rows = r.rows;
+    } else {
+      const r = await pool.query('SELECT * FROM task_attachments WHERE task_id = $1 ORDER BY id', [req.params.taskId]);
+      rows = r.rows;
+    }
+    if (rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Công việc chưa có file đính kèm nào' });
+    }
+    const parts = [];
+    const sources = [];
+    const visionFiles = [];
+    const MAX_VISION_BYTES = 15 * 1024 * 1024; // inline Gemini tối đa ~20MB
+    for (const a of rows) {
+      const r = await readAttachmentText(a);
+      if (r.text) {
+        sources.push({ id: a.id, file_name: a.file_name, chars: r.text.length, skipped: null });
+        parts.push(`--- FILE: ${a.file_name} ---\n${r.text}`);
+      } else if (r.visionFile) {
+        const size = fs.statSync(r.visionFile).size;
+        if (size > MAX_VISION_BYTES) {
+          sources.push({ id: a.id, file_name: a.file_name, chars: 0, skipped: 'File ảnh/scan quá lớn (>15MB) — AI không đọc được' });
+        } else {
+          sources.push({ id: a.id, file_name: a.file_name, chars: 0, skipped: null, via: 'AI đọc hình trực tiếp' });
+          visionFiles.push({ fileName: a.file_name, mimeType: r.visionMime, base64: fs.readFileSync(r.visionFile).toString('base64') });
+        }
+      } else {
+        sources.push({ id: a.id, file_name: a.file_name, chars: 0, skipped: r.skipped });
+      }
+    }
+    if (parts.length === 0 && visionFiles.length === 0) {
+      return res.status(400).json({ success: false, message: 'Không đọc được file nào (link ngoài / file quá lớn / định dạng lạ)', sources });
+    }
+    let material = parts.join('\n\n');
+    const MAX_CHARS = 12000;
+    const truncated = material.length > MAX_CHARS;
+    if (truncated) material = material.slice(0, MAX_CHARS);
+    const draft = await require('./services/ai.service').draftEmail({ text: material, images: visionFiles });
+    res.json({ success: true, data: { ...draft, sources, truncated } });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message, detail: err.detail });
   }
 });
 

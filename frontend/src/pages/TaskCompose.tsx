@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Button, Space, Card, Form, Input, InputNumber, Select, DatePicker, message, notification, Tag, Upload, Alert, Spin, Table, Modal } from 'antd';
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { Button, Space, Card, Form, Input, InputNumber, Select, DatePicker, message, notification, Tag, Upload, Alert, Spin, Table, Modal, Checkbox } from 'antd';
 import { SendOutlined, SaveOutlined, ArrowLeftOutlined, InboxOutlined, LinkOutlined, FileTextOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import dayjs from 'dayjs';
@@ -8,7 +8,7 @@ import {
   getTask, getStudents, addTask, updateTask, addTaskAttachmentLink, uploadTaskFiles,
   getTaskRecipients, addTaskRecipient, deleteRecipient, sendTaskEmail, getClasses, getTeachers,
   getTaskParticipants, addTaskParticipants, deleteParticipant,
-  getTaskAttachments, deleteAttachment,
+  getTaskAttachments, deleteAttachment, draftEmailFromFiles,
   addTeacher, updateTeacher, deleteTeacher, addClass, updateClass, deleteClass,
   getCcContacts, addCcContact, updateCcContact, deleteCcContact,
 } from '../services/api';
@@ -30,6 +30,25 @@ interface TaskComposeProps {
 }
 
 const { Dragger } = Upload;
+
+export interface AutoSaveResult {
+  saved: boolean;
+  skipped?: string;
+  taskId?: number;
+  title: string;
+}
+
+export interface TaskComposeHandle {
+  /** Tab cha gọi khi rời mục: tự Lưu nháp nếu dở, thiếu field thì bỏ qua + lý do */
+  autoSave: () => Promise<AutoSaveResult>;
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  title: 'Tiêu đề',
+  deadline: 'Deadline',
+  semester: 'Học kỳ',
+  content: 'Nội dung',
+};
 
 // Bóc text từ HTML editor để kiểm tra "có nội dung thật không" (<p></p> tính là trống)
 const stripHtmlText = (s: string) =>
@@ -94,7 +113,7 @@ interface StudentRow {
   ClassRoleID?: number;
 }
 
-const TaskCompose: React.FC<TaskComposeProps> = (props) => {
+const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref) => {
   const { taskId: taskIdProp, onDone, onBack, onTitleChange: onTitleProp, onDirtyChange: onDirtyProp } = props;
   const { id: routeId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -123,6 +142,58 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
 
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [existingFiles, setExistingFiles] = useState<Attachment[]>([]);
+  // AI soạn từ file (Phase 1): chỉ task đã lưu mới có file trên server
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiSelected, setAiSelected] = useState<number[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const openAiModal = () => {
+    if (!editingId) { message.info('Lưu nháp trước, rồi mới dùng AI soạn từ file'); return; }
+    if (existingFiles.length === 0) { message.warning('Công việc chưa có file nào trên server'); return; }
+    setAiSelected(existingFiles.map(f => f.id));
+    setAiOpen(true);
+  };
+
+  const runAiDraft = async () => {
+    if (!editingId || aiSelected.length === 0) { message.warning('Chọn ít nhất 1 file'); return; }
+    setAiLoading(true);
+    try {
+      const res = await draftEmailFromFiles(editingId, aiSelected);
+      if (!res.success) throw new Error(res.message || 'AI soạn thất bại');
+      const apply = () => {
+        form.setFieldsValue({ title: res.data.subject, content: res.data.body });
+        setAiOpen(false);
+        message.success('AI đã soạn xong — bạn sửa lại rồi gửi');
+      };
+      const curContent = stripHtmlText(String(form.getFieldValue('content') || ''));
+      if (curContent) {
+        Modal.confirm({
+          title: 'Ghi đè nội dung đã soạn?',
+          content: 'AI sẽ thay tiêu đề + nội dung hiện tại bằng bản mới.',
+          okText: 'Ghi đè',
+          cancelText: 'Giữ lại',
+          onOk: apply,
+        });
+      } else apply();
+    } catch (e) {
+      // Hiện đúng lý do backend trả (vd file nào bị bỏ qua vì sao) thay vì "status code 400"
+      const resp = (e as { response?: { data?: { message?: string; sources?: Array<{ file_name: string; skipped?: string | null }> } } }).response?.data;
+      const reasons = (resp?.sources || []).filter(s => s.skipped).map(s => `${s.file_name}: ${s.skipped}`);
+      message.error(resp?.message || (e as Error).message || 'AI soạn thất bại', 6);
+      if (reasons.length > 0) {
+        Modal.info({
+          title: 'Vì sao file bị bỏ qua?',
+          content: (
+            <ul style={{ paddingLeft: 18, margin: 0 }}>
+              {reasons.map((r, i) => <li key={i}>{r}</li>)}
+            </ul>
+          ),
+          okText: 'Đã hiểu',
+          width: 560,
+        });
+      }
+    } finally { setAiLoading(false); }
+  };
   // Debounce tên tab: ô Tiêu đề gõ vẫn mượt, tên tab cập nhật sau 300ms ngừng gõ
   const titleTimer = useRef<number | null>(null);
   useEffect(() => () => { if (titleTimer.current) window.clearTimeout(titleTimer.current); }, []);
@@ -491,9 +562,20 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
     } else message.error('Lỗi khi xóa file');
   };
 
-  // persistTask: lưu task + recipients + attachments, trả về taskId
-  const persistTask = async (status: string): Promise<number> => {
-    const values = await form.validateFields();
+  // persistTask: lưu task + recipients + attachments, trả về taskId.
+  // lenient (auto-save): bỏ validate nghiêm, chỉ bắt buộc Tiêu đề (DB NOT NULL);
+  // Deadline/Học kỳ được null — quay lại điền sau.
+  const persistTask = async (status: string, opts?: { lenient?: boolean }): Promise<number> => {
+    let values: Record<string, unknown>;
+    if (opts?.lenient) {
+      values = form.getFieldsValue();
+      if (!String(values.title || '').trim()) {
+        const e = { errorFields: [{ name: ['title'] }] };
+        throw e;
+      }
+    } else {
+      values = await form.validateFields();
+    }
     const deadlineValue = values.deadline as unknown as { toISOString: () => string } | null;
     const refDateValue = values.ref_issue_date as unknown as { toISOString?: () => string } | null;
     // Tiêu đề tối đa 1 xuống dòng + vừa cột VARCHAR(255) của DB
@@ -502,7 +584,7 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
       ...values,
       title: cleanTitle,
       deadline: deadlineValue ? (deadlineValue as unknown as { toISOString: () => string }).toISOString() : null,
-      ref_issue_date: refDateValue ? dayjs((refDateValue as unknown as { toISOString?: () => string }).toISOString ? (refDateValue as unknown as { toISOString: () => string }).toISOString() : undefined).format('YYYY-MM-DD') : (values.ref_issue_date ? dayjs(values.ref_issue_date).format('YYYY-MM-DD') : null),
+      ref_issue_date: refDateValue ? dayjs((refDateValue as unknown as { toISOString?: () => string }).toISOString ? (refDateValue as unknown as { toISOString: () => string }).toISOString() : undefined).format('YYYY-MM-DD') : (values.ref_issue_date ? dayjs(values.ref_issue_date as string).format('YYYY-MM-DD') : null),
       status,
     };
     delete (payload as Record<string, unknown>).drive_link;
@@ -565,7 +647,12 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
     return taskId;
   };
 
+  // Chống lưu chồng (bấm tay đúng lúc auto-save chạy và ngược lại)
+  const busyRef = useRef(false);
+
   const handleSaveDraft = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       await persistTask('Đã soạn');
@@ -573,11 +660,13 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
       done();
     } catch {
       message.error('Có lỗi khi lưu nháp!');
-    } finally { setSaving(false); }
+    } finally { setSaving(false); busyRef.current = false; }
   };
 
   const handleSend = async () => {
     if (recipDrafts.length === 0) { message.warning('Hãy thêm ít nhất 1 người nhận trước khi gửi'); return; }
+    if (busyRef.current) return;
+    busyRef.current = true;
     setSaving(true);
     try {
       const taskId = await persistTask('Đã soạn');
@@ -587,8 +676,27 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
       done();
     } catch (e) {
       message.error((e as Error).message || 'Có lỗi khi gửi email!');
-    } finally { setSaving(false); }
+    } finally { setSaving(false); busyRef.current = false; }
   };
+
+  // Tab cha gọi khi rời mục: tự Lưu nháp nếu dở (đúng luật dirty), thiếu field thì bỏ qua + lý do
+  const autoSave = async (): Promise<AutoSaveResult> => {
+    const tabTitle = String(form.getFieldValue('title') || '').trim() || 'Nháp chưa tên';
+    if (busyRef.current || saving) return { saved: false, title: tabTitle, skipped: 'đang lưu dở' };
+    if (loading) return { saved: false, title: tabTitle };
+    if (!computeConfirmNeeded()) return { saved: false, title: tabTitle };
+    busyRef.current = true;
+    try {
+      const taskId = await persistTask('Đã soạn', { lenient: true });
+      return { saved: true, title: tabTitle, taskId };
+    } catch (e) {
+      const fields = (e as { errorFields?: Array<{ name?: (string | number)[] }> })?.errorFields
+        ?.map(f => FIELD_LABELS[String(f.name?.[0])] || String(f.name?.[0] ?? ''))
+        .filter(Boolean) || [];
+      return { saved: false, title: tabTitle, skipped: fields.length > 0 ? `thiếu ${fields.join(', ')}` : 'không lưu được' };
+    } finally { busyRef.current = false; }
+  };
+  useImperativeHandle(ref, () => ({ autoSave }));
 
   const toggleCc = (on: boolean) => {
     setCcOn(on);
@@ -886,7 +994,12 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
               </Form.Item>
             </Card>
 
-            <Card size="small" className="tc-card" title={`Tài liệu đính kèm (${existingFiles.length + fileList.length})`}>
+            <Card
+              size="small"
+              className="tc-card"
+              title={`Tài liệu đính kèm (${existingFiles.length + fileList.length})`}
+              extra={<Button size="small" onClick={openAiModal}>✨ AI soạn từ file</Button>}
+            >
               <Form.Item name="drive_link" label="Link Google Sheets / Docs">
                 <Input prefix={<LinkOutlined style={{ color: 'rgba(0,0,0,.25)' }} />} placeholder="Dán link..." />
               </Form.Item>
@@ -944,6 +1057,32 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
         })}
       </Modal>
 
+      {/* Popup chọn file cho AI soạn (Phase 1) */}
+      <Modal
+        title="AI soạn email từ file nào?"
+        open={aiOpen}
+        onCancel={() => setAiOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setAiOpen(false)}>Đóng</Button>,
+          <Button key="run" type="primary" loading={aiLoading} disabled={aiSelected.length === 0} onClick={runAiDraft}>
+            Soạn email
+          </Button>,
+        ]}
+      >
+        <Checkbox.Group
+          style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+          value={aiSelected}
+          onChange={(v) => setAiSelected(v as number[])}
+        >
+          {existingFiles.map(f => (
+            <Checkbox key={f.id} value={f.id}>{f.file_name}</Checkbox>
+          ))}
+        </Checkbox.Group>
+        <div style={{ marginTop: 12, color: '#666', fontSize: 12 }}>
+          Đọc PDF chữ / Word / Excel / TXT. PDF scan và ảnh sẽ gửi cho AI đọc trực tiếp (chậm hơn, tốn quota hơn).
+        </div>
+      </Modal>
+
       {/* Popup Danh bạ: GV + Lớp + Cc, sửa thẳng vào DB */}
       <DirectoryModal
         open={directoryOpen}
@@ -964,6 +1103,6 @@ const TaskCompose: React.FC<TaskComposeProps> = (props) => {
       />
     </div>
   );
-};
+});
 
 export default TaskCompose;

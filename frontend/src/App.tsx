@@ -1,11 +1,10 @@
-import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useParams, useNavigate } from 'react-router-dom';
 import { Layout, ConfigProvider } from 'antd';
 import Header from './components/Header';
 import Dashboard from './pages/Dashboard';
 import Students from './pages/Students';
 import TasksWorkspace from './pages/TasksWorkspace';
-import TaskCompose from './pages/TaskCompose';
 import ReportsPage from './pages/ReportsPage';
 import RecordsPage from './pages/RecordsPage';
 import EOfficePage from './pages/EOfficePage';
@@ -22,6 +21,25 @@ const isWidePath = (pathname: string) =>
   pathname === '/ho-so' ||
   pathname === '/eoffice' ||
   /\/cong-viec\/\d+\/sua$/.test(pathname);
+
+// Deep-link soạn/sửa cũ → dồn về tab workspace (giữ nháp khi chuyển mục).
+// Mọi đường mở soạn (danh sách, eOffice, URL) đều qua workspace, không còn trang lẻ.
+const ComposeRedirectNew: React.FC = () => {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate('/cong-viec', { replace: true, state: { openNew: true } });
+  }, [navigate]);
+  return null;
+};
+
+const ComposeRedirectEdit: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate('/cong-viec', { replace: true, state: { openEditTaskId: Number(id) } });
+  }, [navigate, id]);
+  return null;
+};
 
 const PageContent: React.FC = () => {
   const location = useLocation();
@@ -53,8 +71,8 @@ const PageContent: React.FC = () => {
           <Route path="/" element={<Dashboard />} />
           <Route path="/sinh-vien" element={<Students />} />
           <Route path="/cong-viec" element={<></>} />
-          <Route path="/cong-viec/moi" element={<TaskCompose />} />
-          <Route path="/cong-viec/:id/sua" element={<TaskCompose />} />
+          <Route path="/cong-viec/moi" element={<ComposeRedirectNew />} />
+          <Route path="/cong-viec/:id/sua" element={<ComposeRedirectEdit />} />
           <Route path="/bao-cao" element={<ReportsPage />} />
           <Route path="/ho-so" element={<RecordsPage />} />
           <Route path="/eoffice" element={<EOfficePage />} />

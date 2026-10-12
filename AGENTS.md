@@ -25,6 +25,7 @@ Root `package-lock.json` is empty — always run inside `backend/` or `frontend/
 - DB is remote Supabase — no local migration step; schema changes go in `database-script.md` + applied to Supabase directly.
 - Student source API is hardcoded in `server.js:46` (`POST https://quan-ly-dao-tao-api.nguyentronghieu.io.vn/api/v1/LayDanhSachSinhVienTheoLop`, body `{ Id: classId }`, header `X-API-KEY`). Do not use the old `apidog.io` URL from `yeucau.md`.
 - eOffice (§3, flow B auto): `backend/src/services/eoffice.service.js` adapter (`getDocuments/getDocumentDetail/downloadAttachment`, `EOFFICE_PROVIDER=mock|http`, `EOFFICE_BASE_URL`, no auth on clone API). `tasks.eoffice_id` UNIQUE = dedupe key; `POST /api/eoffice/documents/:id/create-task` creates task + auto-downloads available attachments to local `uploads/`.
+- AI Phase 1+vision: `POST /api/tasks/:id/draft-email` trích chữ PDF/DOCX/XLSX/TXT (cắt 12000 ký tự) → Gemini (`GEMINI_MODEL`, key chỉ ở backend `.env`) viết `{subject, body}` giọng hành chính; PDF scan/ảnh gửi thẳng cho AI đọc hình (vision, ≤15MB, khỏi OCR cục bộ); link ngoài/file quá lớn bỏ qua có lý do. Nút "AI soạn từ file" ở khối file trang Soạn (task đã lưu); lỗi hiện đúng message backend + bảng lý do từng file.
 
 ## Conventions & gotchas
 

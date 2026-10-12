@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { Tag, Modal, message } from 'antd';
 import { EditOutlined, FileAddOutlined } from '@ant-design/icons';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Tasks from './Tasks';
 import TaskCompose from './TaskCompose';
+import type { TaskComposeHandle } from './TaskCompose';
+import { getTask } from '../services/api';
 import type { Task } from '../types';
 
 interface ComposeTab {
@@ -39,6 +42,51 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
   const tabsRef = useRef(tabs);
   useEffect(() => { tabsRef.current = tabs; });
 
+  // Ref tới từng tab soạn để gọi auto-save khi rời mục
+  const tabRefs = useRef(new Map<string, TaskComposeHandle>());
+  const setTabRef = (key: string) => (h: TaskComposeHandle | null) => {
+    if (h) tabRefs.current.set(key, h);
+    else tabRefs.current.delete(key);
+  };
+
+  // Rời mục Công việc → tự Lưu nháp các tab dở (đúng luật dirty), thiếu field thì bỏ qua + báo
+  const prevActive = useRef(active);
+  useEffect(() => {
+    const wasActive = prevActive.current;
+    prevActive.current = active;
+    if (!wasActive || active) return;
+    (async () => {
+      const saved: string[] = [];
+      const skipped: string[] = [];
+      let lastConvertedKey: string | null = null;
+      for (const t of tabsRef.current) {
+        const h = tabRefs.current.get(t.key);
+        if (!h) continue;
+        let r;
+        try {
+          r = await h.autoSave();
+        } catch { continue; }
+        if (r.saved && r.taskId) {
+          saved.push(`'${r.title}'`);
+          // Tab new lưu xong thành edit (kẻo lần sau đẻ task mới) — mở lại từ DB cho sạch snapshot
+          if (t.kind === 'new') {
+            const newKey = `edit-${r.taskId}`;
+            setTabs(prevTabs => {
+              const without = prevTabs.filter(x => x.key !== t.key && x.key !== newKey);
+              return [...without, { key: newKey, kind: 'edit', taskId: r.taskId as number, title: r.title, dirty: false }];
+            });
+            lastConvertedKey = newKey;
+          }
+        } else if (r.skipped) {
+          skipped.push(`'${r.title}': ${r.skipped}`);
+        }
+      }
+      if (lastConvertedKey) setActiveKey(lastConvertedKey);
+      if (saved.length > 0) message.success(`Đã tự lưu nháp ${saved.length} việc: ${saved.join(', ')}`);
+      if (skipped.length > 0) message.warning(`Chưa lưu được: ${skipped.join('; ')}`);
+    })();
+  }, [active]);
+
   const patchTab = (key: string, patch: Partial<ComposeTab>) => {
     setTabs(prev => {
       const i = prev.findIndex(t => t.key === key);
@@ -64,6 +112,26 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
     setTabs(prev => [...prev, { key, kind: 'edit', taskId: task.id, title: task.title || '', dirty: false }]);
     setActiveKey(key);
   }, []);
+
+  // Mọi đường mở soạn (eOffice, deep-link) đều dồn về tab workspace để giữ nháp.
+  // Gửi kèm location.state {openNew} hoặc {openEditTaskId}, đọc 1 lần rồi xóa.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const consumedState = useRef<unknown>(null);
+  useEffect(() => {
+    if (!active) return;
+    const s = location.state as { openNew?: boolean; openEditTaskId?: number } | null;
+    if (!s || consumedState.current === s) return;
+    consumedState.current = s;
+    if (s.openEditTaskId) {
+      getTask(s.openEditTaskId)
+        .then(res => { if (res.success) openEdit(res.data); })
+        .catch(() => { message.error('Không mở được công việc'); });
+    } else if (s.openNew) {
+      openNew();
+    }
+    navigate('/cong-viec', { replace: true, state: null });
+  }, [active, location, navigate, openEdit, openNew]);
 
   const removeTab = (key: string) => {
     setTabs(prev => {
@@ -129,6 +197,7 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
       {tabs.map(t => (
         <div key={t.key} style={{ display: activeKey === t.key ? 'block' : 'none' }}>
           <TaskCompose
+            ref={setTabRef(t.key)}
             taskId={t.kind === 'edit' ? t.taskId ?? null : null}
             onTitleChange={(title) => patchTab(t.key, { title })}
             onDirtyChange={(dirty) => patchTab(t.key, { dirty })}

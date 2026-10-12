@@ -83,7 +83,7 @@ const EOfficePage: React.FC = () => {
         message.success(`Đã tạo công việc + tải ${added} file đính kèm${skipped.length ? ` (${skipped.length} file bỏ qua)` : ''}`);
       }
       setDrawerOpen(false);
-      navigate(`/cong-viec/${res.data.id}/sua`);
+      navigate('/cong-viec', { state: { openEditTaskId: res.data.id } });
     } catch (e) {
       message.error((e as Error).message || 'Không tạo được công việc');
     } finally { setCreating(false); }

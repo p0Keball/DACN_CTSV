@@ -111,6 +111,10 @@ export const getEofficeDocs = async (params: object) => (await axios.get(`${API_
 export const getEofficeDoc = async (id: string) => (await axios.get(`${API_BASE_URL}/eoffice/documents/${id}`)).data;
 export const createTaskFromEoffice = async (id: string) => (await axios.post(`${API_BASE_URL}/eoffice/documents/${id}/create-task`)).data;
 
+// AI soạn email từ file đính kèm (Phase 1)
+export const draftEmailFromFiles = async (taskId: number, attachment_ids?: number[]) =>
+  (await axios.post(`${API_BASE_URL}/tasks/${taskId}/draft-email`, { attachment_ids })).data;
+
 // Tủ hồ sơ (tab Hồ sơ): file gom theo tháng tạo công việc
 export const getFilesLibrary = async () => (await axios.get(`${API_BASE_URL}/files/library`)).data;
 export const searchFiles = async (params: { q?: string; type?: string; source?: string }) =>
