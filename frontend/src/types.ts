@@ -1,5 +1,5 @@
 // Shared types & constants cho module Công việc
-export const STATUS_OPTIONS = ['Mới tạo', 'Đã soạn', 'Đã gửi', 'Chờ phản hồi', 'Đang xử lý', 'Kết thúc', 'Quá hạn'];
+export const STATUS_OPTIONS = ['Nháp', 'Đã gửi', 'Kết thúc'];
 export const TASK_TYPE_OPTIONS = [
   { value: 'ThongBaoDon', label: 'Thông báo đơn (soạn + gửi là xong)' },
   { value: 'ChienDichPhanCong', label: 'Chiến dịch phân công (cần chọn lớp / theo dõi SV)' },
@@ -64,9 +64,7 @@ export const PARTICIPANT_STATUSES = ['Được phân công', 'Đã xác nhận',
 
 export const statusColor = (status: string) => {
   if (status === 'Kết thúc') return 'success';
-  if (status === 'Quá hạn') return 'error';
-  if (status === 'Đã gửi') return 'cyan';
-  if (status === 'Chờ phản hồi') return 'purple';
-  if (status === 'Đã soạn') return 'gold';
-  return 'processing';
+  if (status === 'Đã gửi') return 'processing';
+  if (status === 'Nháp') return 'gold';
+  return 'default';
 };

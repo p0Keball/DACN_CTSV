@@ -55,10 +55,14 @@ export const assignTeacherToClass = async (classCode: string, teacherId: number 
 
 export const updateTeacher = async (id: number, data: Record<string, unknown>) => (await axios.put(`${API_BASE_URL}/teachers/${id}`, data)).data;
 export const deleteTeacher = async (id: number) => (await axios.delete(`${API_BASE_URL}/teachers/${id}`)).data;
+// Gỡ khỏi danh bạ = chỉ xoá hòm thư, giữ GV + phân công GVCN
+export const clearTeacherEmail = async (id: number) => (await axios.delete(`${API_BASE_URL}/teachers/${id}/email`)).data;
 
 export const addClass = async (data: Record<string, unknown>) => (await axios.post(`${API_BASE_URL}/classes`, data)).data;
 export const updateClass = async (classCode: string, data: Record<string, unknown>) => (await axios.put(`${API_BASE_URL}/classes/${classCode}`, data)).data;
 export const deleteClass = async (classCode: string) => (await axios.delete(`${API_BASE_URL}/classes/${classCode}`)).data;
+// Gỡ khỏi danh bạ = chỉ xoá hòm thư lớp, giữ lớp + sinh viên
+export const clearClassEmail = async (classCode: string) => (await axios.delete(`${API_BASE_URL}/classes/${classCode}/email`)).data;
 
 export const addStudent = async (data: Record<string, unknown>) => (await axios.post(`${API_BASE_URL}/students`, data)).data;
 export const updateStudent = async (studentId: string, data: Record<string, unknown>) => (await axios.put(`${API_BASE_URL}/students/${studentId}`, data)).data;
@@ -69,6 +73,7 @@ export const getTasks = async (params?: object) => (await axios.get(`${API_BASE_
 export const getTask = async (id: number) => (await axios.get(`${API_BASE_URL}/tasks/${id}`)).data;
 export const addTask = async (data: Record<string, unknown>) => (await axios.post(`${API_BASE_URL}/tasks`, data)).data;
 export const updateTask = async (id: number, data: Record<string, unknown>) => (await axios.put(`${API_BASE_URL}/tasks/${id}`, data)).data;
+export const setTaskStatus = async (id: number, status: string) => (await axios.put(`${API_BASE_URL}/tasks/${id}/status`, { status })).data;
 export const deleteTask = async (id: number) => (await axios.delete(`${API_BASE_URL}/tasks/${id}`)).data;
 
 // File đính kèm
@@ -83,7 +88,8 @@ export const getTaskRecipients = async (taskId: number) => (await axios.get(`${A
 export const addTaskRecipient = async (taskId: number, data: object) => (await axios.post(`${API_BASE_URL}/tasks/${taskId}/recipients`, data)).data;
 export const deleteRecipient = async (id: number) => (await axios.delete(`${API_BASE_URL}/recipients/${id}`)).data;
 export const getTaskHistory = async (taskId: number) => (await axios.get(`${API_BASE_URL}/tasks/${taskId}/history`)).data;
-export const sendTaskEmail = async (taskId: number, send_type?: string) => (await axios.post(`${API_BASE_URL}/tasks/${taskId}/send`, { send_type })).data;
+export const sendTaskEmail = async (taskId: number, send_type?: string, include_assignments = true) =>
+  (await axios.post(`${API_BASE_URL}/tasks/${taskId}/send`, { send_type, include_assignments })).data;
 
 // Phân công sinh viên (tái dùng bảng task_assignments — Gói 4)
 export const getTaskParticipants = async (taskId: number) => (await axios.get(`${API_BASE_URL}/tasks/${taskId}/participants`)).data;
@@ -94,6 +100,10 @@ export const deleteParticipant = async (id: number) => (await axios.delete(`${AP
 // Điểm danh 1 SV: chỉ task Kết thúc (mỗi bản ghi = 1 đơn vị điểm danh)
 export const getStudentAttendance = async (studentId: string) =>
   (await axios.get(`${API_BASE_URL}/students/${encodeURIComponent(studentId)}/attendance`)).data;
+
+// Công việc 1 SV được phân công (panel Hồ sơ SV — mọi trạng thái)
+export const getStudentAssignments = async (studentId: string) =>
+  (await axios.get(`${API_BASE_URL}/students/${encodeURIComponent(studentId)}/assignments`)).data;
 
 // Báo cáo tổng hợp (Gói 6, chỉ đọc)
 export const getTaskReport = async (params: { group?: string; from?: string; to?: string }) =>

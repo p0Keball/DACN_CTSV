@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
 import { Button, Space, Card, Form, Input, InputNumber, Select, DatePicker, message, notification, Tag, Upload, Alert, Spin, Table, Modal, Checkbox } from 'antd';
 import { SendOutlined, SaveOutlined, ArrowLeftOutlined, InboxOutlined, LinkOutlined, FileTextOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
@@ -9,13 +9,13 @@ import {
   getTaskRecipients, addTaskRecipient, deleteRecipient, sendTaskEmail, getClasses, getTeachers,
   getTaskParticipants, addTaskParticipants, deleteParticipant,
   getTaskAttachments, deleteAttachment, draftEmailFromFiles,
-  addTeacher, updateTeacher, deleteTeacher, addClass, updateClass, deleteClass,
+  addTeacher, updateTeacher, clearTeacherEmail, addClass, updateClass, clearClassEmail,
   getCcContacts, addCcContact, updateCcContact, deleteCcContact,
 } from '../services/api';
-import { STATUS_OPTIONS, TASK_TYPE_OPTIONS } from '../types';
+import { TASK_TYPE_OPTIONS } from '../types';
 import type { Recipient, Attachment } from '../types';
 import EmailEditor from '../components/EmailEditor';
-import DirectoryModal from '../components/DirectoryModal';
+import DirectoryModal, { type DirEntry } from '../components/DirectoryModal';
 import './TaskCompose.css';
 
 interface TaskComposeProps {
@@ -50,6 +50,9 @@ const FIELD_LABELS: Record<string, string> = {
   content: 'Nội dung',
 };
 
+// Lưu nháp/auto-save không bắt buộc Tiêu đề — dùng tên mặc định thay vì chặn lưu
+const DEFAULT_TITLE = 'Không có tiêu đề';
+
 // Bóc text từ HTML editor để kiểm tra "có nội dung thật không" (<p></p> tính là trống)
 const stripHtmlText = (s: string) =>
   s.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
@@ -60,10 +63,17 @@ const sameStringSet = (a: string[], b: string[]) => {
   return a.every(x => sb.has(x));
 };
 
+// Lấy message THẬT backend trả (vd "Chưa cấu hình SMTP...") thay vì
+// "Request failed with status code 502" mặc định của axios.
+const apiErrorMessage = (e: unknown, fallback: string) => {
+  const resp = (e as { response?: { data?: { message?: string } } })?.response?.data;
+  return resp?.message || (e as Error)?.message || fallback;
+};
+
 // Chuẩn hóa 1 task/form về cùng shape để so sánh "có thay đổi gì không"
 const snapForm = (t: {
   title?: unknown; content?: unknown; deadline?: unknown; semester?: unknown;
-  priority?: unknown; source?: unknown; status?: unknown; task_type?: unknown;
+  priority?: unknown; source?: unknown; task_type?: unknown;
   ref_doc_number?: unknown; ref_issue_date?: unknown; remind_before_days?: unknown;
 }) => ({
   title: String(t.title || ''),
@@ -72,7 +82,6 @@ const snapForm = (t: {
   semester: t.semester || null,
   priority: t.priority || null,
   source: t.source || null,
-  status: t.status || null,
   task_type: t.task_type || null,
   ref_doc_number: t.ref_doc_number || null,
   ref_issue_date: t.ref_issue_date ? dayjs(t.ref_issue_date as string | Date).format('YYYY-MM-DD') : null,
@@ -125,6 +134,8 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
   const onDoneRef = useRef(onDone);
   const onTitleRef = useRef(onTitleProp);
   const onDirtyRef = useRef(onDirtyProp);
+  // Trạng thái của task đang sửa (null = soạn mới): lưu nháp không được kéo task đã gửi/kết thúc về Nháp
+  const loadedStatusRef = useRef<string | null>(null);
   useEffect(() => {
     onDoneRef.current = onDone;
     onTitleRef.current = onTitleProp;
@@ -136,6 +147,8 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
 
   const [loading, setLoading] = useState(!!editingId);
   const [saving, setSaving] = useState(false);
+  // Kèm bảng phân công SV vào nội dung email khi gửi (mặc định bật)
+  const [includeAssignments, setIncludeAssignments] = useState(true);
   const [form] = Form.useForm();
   const [sourceWatch, setSourceWatch] = useState<string>('Thủ công');
   const [taskTypeWatch, setTaskTypeWatch] = useState<string>('ThongBaoDon');
@@ -201,13 +214,13 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
   const [recipEmail, setRecipEmail] = useState('');
   const [recipName, setRecipName] = useState('');
   const [classes, setClasses] = useState<Array<{ class_code: string; class_name: string; teacher_id: number | null; teacher_name: string | null; email?: string | null }>>([]);
-  const [teachers, setTeachers] = useState<Array<{ id: number; full_name: string; email: string }>>([]);
+  const [teachers, setTeachers] = useState<Array<{ id: number; full_name: string; email: string | null }>>([]);
   const [directoryOpen, setDirectoryOpen] = useState(false);
 
-  // Cụm Cc (ban lãnh đạo): toggle mặc định bật; tắt thì gỡ cả cụm khỏi người nhận
-  const [ccOn, setCcOn] = useState(true);
+  // Cụm Cc (ban lãnh đạo): trạng thái nút suy ra từ danh sách người nhận Cc thực tế
   const [ccList, setCcList] = useState<Array<{ id: number; name: string; email: string }>>([]);
   const ccSeeded = useRef(false);
+  const ccUserTouched = useRef(false);
 
   // Khối Phân công SV (Gói 4): state giữ theo MSSV, không mất khi đổi lớp xem
   const [allStudents, setAllStudents] = useState<StudentRow[]>([]);
@@ -235,38 +248,27 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     getCcContacts().then(res => { if (res.success) setCcList(res.data); }).catch(() => undefined);
   }, []);
 
-  // Soạn mới + toggle CC đang bật: tự đưa cụm Cc vào (im lặng, không toast)
+  // Đổi task (mở sửa / soạn mới) → cho phép seed Cc lại.
+  // Trạng thái nút CC tự suy ra từ task_recipients nên không cần reset state.
   useEffect(() => {
-    if (editingId || !ccOn || ccList.length === 0 || ccSeeded.current) return;
+    ccSeeded.current = false;
+    ccUserTouched.current = false;
+  }, [editingId]);
+
+  // Soạn mới: tự đưa cụm Cc vào 1 lần khi danh bạ đã tải (im lặng, không toast).
+  // Người dùng đã bấm tắt trước khi danh bạ tải xong thì không tự thêm lại.
+  useEffect(() => {
+    if (editingId || ccList.length === 0 || ccSeeded.current || ccUserTouched.current) return;
     ccSeeded.current = true;
     setRecipDrafts(prev => {
+      if (prev.some(r => r.kind === 'cc')) return prev;
       const existing = new Set(prev.map(r => r.recipient_email.toLowerCase()));
       const adds = ccList
         .filter(c => c.email && !existing.has(c.email.toLowerCase()))
         .map(c => ({ recipient_email: c.email, recipient_name: c.name, recipient_group: 'Ban lãnh đạo', kind: 'cc' }));
       return [...prev, ...adds];
     });
-  }, [editingId, ccOn, ccList]);
-
-  // Sửa task chưa có người nhận nào + CC đang bật: tự đưa cụm Cc vào (vd task vừa tạo từ eOffice)
-  const editCcDone = useRef(false);
-  useEffect(() => {
-    ccSeeded.current = false;
-    editCcDone.current = false;
-  }, [editingId]);
-  useEffect(() => {
-    if (!editingId || loading || !ccOn || ccList.length === 0 || editCcDone.current) return;
-    editCcDone.current = true;
-    const ccMails = ccList.filter(c => c.email).map(c => c.email.toLowerCase());
-    setRecipDrafts(prev => {
-      if (prev.length > 0) return prev;
-      return ccList
-        .filter(c => c.email)
-        .map(c => ({ recipient_email: c.email, recipient_name: c.name, recipient_group: 'Ban lãnh đạo', kind: 'cc' }));
-    });
-    // Seed tự động không tính là "người dùng thay đổi" — cập nhật ảnh gốc theo
-    initRecipsRef.current = ccMails;
-  }, [editingId, loading, ccOn, ccList]);
+  }, [editingId, ccList]);
 
   useEffect(() => {
     if (!editingId) return;
@@ -277,6 +279,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
         if (!isMounted) return;
         const task = taskRes.success ? taskRes.data : null;
         if (!task) { message.error('Không tìm thấy công việc'); stableDone(); return; }
+        loadedStatusRef.current = task.status || null;
         form.setFieldsValue({
           ...task,
           deadline: task.deadline ? dayjs(task.deadline) : null,
@@ -296,6 +299,14 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
           const ids = partRes.data.map((p: { student_id: string }) => p.student_id);
           setSelectedStudents(ids);
           initSelectedRef.current = [...ids];
+          // Bộ lọc lớp lấy theo CHÍNH các lớp của SV đã phân công — không để mặc định
+          // "lớp đầu tiên" ẩn đi lựa chọn của SV thuộc lớp khác.
+          const assignedClasses = Array.from(new Set<string>(
+            (partRes.data as Array<{ class_code?: string | null; ClassStudentID?: string | null }>)
+              .map(p => p.class_code || p.ClassStudentID || '')
+              .filter(Boolean)
+          ));
+          if (assignedClasses.length > 0) setAssignClasses(assignedClasses);
           if ((task.task_type || 'ThongBaoDon') === 'ChienDichPhanCong' || ids.length > 0) setAssignOpen(true);
         } else if ((task.task_type || 'ThongBaoDon') === 'ChienDichPhanCong') {
           setAssignOpen(true);
@@ -320,12 +331,27 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
   const initSelectedRef = useRef<string[]>([]);
   const initFormRef = useRef<Record<string, unknown> | null>(null);
 
-  // Luật hỏi xác nhận khi đóng tab: soạn mới = có chữ ở tiêu đề/nội dung;
+  // Cụm Cc tự seed khi soạn mới không tính là thay đổi của người dùng.
+  // So sánh người nhận hiện tại với danh sách Cc mặc định để biết có thêm/gỡ ai không.
+  const autoCcEmails = ccList.filter(c => c.email).map(c => c.email.toLowerCase());
+  const recipsDifferFromAutoCc = !sameStringSet(
+    recipDrafts.map(r => r.recipient_email.toLowerCase()),
+    autoCcEmails
+  );
+
+  // Luật hỏi xác nhận khi đóng tab: soạn mới = có chữ ở tiêu đề/nội dung,
+  // có file/SV hoặc người nhận khác cụm Cc mặc định;
   // sửa = form khác lúc mở, hoặc người nhận/file/SV khác lúc mở.
   const computeConfirmNeeded = () => {
     const titleTxt = String(form.getFieldValue('title') || '').trim();
     const bodyTxt = stripHtmlText(String(form.getFieldValue('content') || ''));
-    if (!editingId) return titleTxt !== '' || bodyTxt !== '';
+    if (!editingId) {
+      return titleTxt !== ''
+        || bodyTxt !== ''
+        || fileList.length > 0
+        || selectedStudents.length > 0
+        || recipsDifferFromAutoCc;
+    }
     const init = initFormRef.current;
     const formDiffers = !init || JSON.stringify(snapForm(form.getFieldsValue())) !== JSON.stringify(init);
     const curRecips = recipDrafts.map(r => r.recipient_email.toLowerCase());
@@ -342,7 +368,11 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     const bodyTxt = stripHtmlText(String(form.getFieldValue('content') || ''));
     let needed: boolean;
     if (!editingId) {
-      needed = titleTxt !== '' || bodyTxt !== '';
+      needed = titleTxt !== ''
+        || bodyTxt !== ''
+        || fileList.length > 0
+        || selectedStudents.length > 0
+        || recipsDifferFromAutoCc;
     } else {
       const init = initFormRef.current;
       needed = !init
@@ -352,7 +382,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
         || fileList.length > 0;
     }
     onDirtyRef.current?.(needed);
-  }, [editingId, recipDrafts, fileList, selectedStudents, form]);
+  }, [editingId, recipDrafts, fileList, selectedStudents, form, ccList]);
 
   const handleFormChange = (changed: Record<string, unknown>) => {
     onDirtyRef.current?.(computeConfirmNeeded());
@@ -378,7 +408,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
   const classesWithEmail = classes.filter(c => c.email);
   const usingFallback = teachers.length === 0 && classesWithEmail.length === 0;
   const dirGv: Array<{ name: string; email: string }> = teachers.length > 0
-    ? teachers.filter(t => t.email).map(t => ({ name: t.full_name, email: t.email }))
+    ? teachers.filter(t => t.email).map(t => ({ name: t.full_name, email: t.email as string }))
     : PRESET_GV;
   const dirLop: Array<{ name: string; email: string }> = classesWithEmail.length > 0
     ? classesWithEmail.map(c => ({ name: `Lớp ${c.class_code}`, email: c.email as string }))
@@ -442,15 +472,6 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     } catch { message.error('Không cập nhật được'); }
   };
 
-  const dirDeleteTeacher = async (id: number) => {
-    try {
-      const res = await deleteTeacher(id);
-      if (!res.success) throw new Error();
-      setTeachers(prev => prev.filter(t => t.id !== id));
-      message.success('Đã xóa khỏi danh bạ');
-    } catch { message.error('Không xóa được'); }
-  };
-
   const dirAddClass = async (code: string, email: string) => {
     try {
       const res = await addClass({ class_code: code, email });
@@ -468,15 +489,6 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
       setClasses(prev => prev.map(c => (c.class_code === code ? { ...c, email } : c)));
       message.success('Đã cập nhật hòm thư lớp');
     } catch { message.error('Không cập nhật được'); }
-  };
-
-  const dirDeleteClass = async (code: string) => {
-    try {
-      const res = await deleteClass(code);
-      if (!res.success) throw new Error();
-      setClasses(prev => prev.filter(c => c.class_code !== code));
-      message.success('Đã xóa lớp khỏi danh bạ');
-    } catch { message.error('Không xóa được'); }
   };
 
   const dirAddCc = async (name: string, email: string) => {
@@ -498,15 +510,29 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     } catch { message.error('Không cập nhật được'); }
   };
 
-  const dirDeleteCc = async (id: number) => {
-    try {
-      const res = await deleteCcContact(id);
-      if (!res.success) throw new Error();
-      setCcList(prev => prev.filter(c => c.id !== id));
+  // Gỡ khỏi danh bạ: GV/Lớp chỉ xoá hòm thư (giữ GVCN, lớp, sinh viên); Cc xoá hẳn liên hệ
+  const removeDirEntries = async (entries: DirEntry[]) => {
+    const teacherIds = entries.filter(e => e.type === 'teacher').map(e => e.id as number);
+    const codes = entries.filter(e => e.type === 'class').map(e => e.code as string);
+    const ccIds = entries.filter(e => e.type === 'cc').map(e => e.id as number);
+    const removedCcEmails = ccList.filter(c => ccIds.includes(c.id)).map(c => c.email.toLowerCase());
+    const settle = (p: Promise<{ success?: boolean }>) => p.catch(() => ({ success: false }));
+    const results = await Promise.all([
+      ...teacherIds.map(id => settle(clearTeacherEmail(id))),
+      ...codes.map(code => settle(clearClassEmail(code))),
+      ...ccIds.map(id => settle(deleteCcContact(id))),
+    ]);
+    const ok = results.filter(r => r.success).length;
+    if (teacherIds.length) setTeachers(prev => prev.map(t => (teacherIds.includes(t.id) ? { ...t, email: null } : t)));
+    if (codes.length) setClasses(prev => prev.map(c => (codes.includes(c.class_code) ? { ...c, email: null } : c)));
+    if (ccIds.length) {
+      setCcList(prev => prev.filter(c => !ccIds.includes(c.id)));
       // Gỡ luôn khỏi danh sách đang soạn (nếu có)
-      setRecipDrafts(prev => prev.filter(r => r.kind !== 'cc' || !ccList.some(c => c.id === id && c.email.toLowerCase() === r.recipient_email.toLowerCase())));
-      message.success('Đã xóa khỏi cụm Cc');
-    } catch { message.error('Không xóa được'); }
+      setRecipDrafts(prev => prev.filter(r => !(r.kind === 'cc' && removedCcEmails.includes(r.recipient_email.toLowerCase()))));
+    }
+    if (ok === entries.length) message.success(`Đã gỡ ${ok} mục khỏi danh bạ`);
+    else if (ok > 0) message.warning(`Chỉ gỡ được ${ok}/${entries.length} mục`);
+    else message.error('Không gỡ được mục nào');
   };
 
   const recipTag = (r: Recipient) => (
@@ -524,11 +550,12 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     const cls = classes.find(c => c.class_code === classCode);
     if (!cls?.teacher_id) { message.warning(`Lớp ${classCode} chưa gán GVCN`); return; }
     const t = teacherById(cls.teacher_id);
-    if (!t?.email) { message.warning('GVCN chưa có email'); return; }
-    if (recipDrafts.some(r => r.recipient_email.toLowerCase() === t.email.toLowerCase())) {
+    const tEmail = t?.email;
+    if (!t || !tEmail) { message.warning('GVCN chưa có email'); return; }
+    if (recipDrafts.some(r => r.recipient_email.toLowerCase() === tEmail.toLowerCase())) {
       message.warning('Đã có trong danh sách'); return;
     }
-    setRecipDrafts(prev => [...prev, { recipient_email: t.email, recipient_name: `${t.full_name} (GVCN ${classCode})`, recipient_group: 'GVCN' }]);
+    setRecipDrafts(prev => [...prev, { recipient_email: tEmail, recipient_name: `${t.full_name} (GVCN ${classCode})`, recipient_group: 'GVCN' }]);
   };
 
   const escapeHtml = (s: string) =>
@@ -562,6 +589,10 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     } else message.error('Lỗi khi xóa file');
   };
 
+  // Task mới đã tạo nhưng bước sau lỗi (upload file / SMTP / đồng bộ người nhận)
+  // → các lần lưu/gửi lại phải cập nhật chính task đó, không gọi addTask lần 2.
+  const createdTaskIdRef = useRef<number | null>(null);
+
   // persistTask: lưu task + recipients + attachments, trả về taskId.
   // lenient (auto-save): bỏ validate nghiêm, chỉ bắt buộc Tiêu đề (DB NOT NULL);
   // Deadline/Học kỳ được null — quay lại điền sau.
@@ -570,8 +601,9 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     if (opts?.lenient) {
       values = form.getFieldsValue();
       if (!String(values.title || '').trim()) {
-        const e = { errorFields: [{ name: ['title'] }] };
-        throw e;
+        values.title = DEFAULT_TITLE;
+        form.setFieldsValue({ title: DEFAULT_TITLE });
+        onTitleRef.current?.(DEFAULT_TITLE);
       }
     } else {
       values = await form.validateFields();
@@ -589,14 +621,20 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     };
     delete (payload as Record<string, unknown>).drive_link;
 
-    const taskRes = editingId ? await updateTask(editingId, payload) : await addTask(payload);
+    // Nếu task mới đã được tạo ở lần trước (dù bước sau lỗi) thì lần này chỉ cập nhật.
+    const existingTaskId = editingId || createdTaskIdRef.current;
+    const taskRes = existingTaskId ? await updateTask(existingTaskId, payload) : await addTask(payload);
     if (!taskRes.success) throw new Error('Lỗi khi lưu công việc');
-    const taskId: number = editingId || taskRes.data.id;
+    const taskId: number = existingTaskId || taskRes.data.id;
+    if (!existingTaskId) createdTaskIdRef.current = taskId;
+    const isExistingTask = Boolean(existingTaskId);
 
-    // Đồng bộ recipients: lấy danh sách cũ, xóa cái bị gỡ, thêm cái mới
-    if (editingId) {
+    // Đồng bộ recipients: lấy danh sách cũ, xóa cái bị gỡ, thêm cái mới.
+    // Task vừa tạo ở lần trước cũng phải đi nhánh sync để tránh nhân đôi người nhận.
+    if (isExistingTask) {
       const oldRes = await getTaskRecipients(taskId);
-      const oldList: Array<{ id: number; recipient_email: string }> = oldRes.success ? oldRes.data : [];
+      if (!oldRes.success) throw new Error('Không tải được người nhận cũ để đồng bộ');
+      const oldList: Array<{ id: number; recipient_email: string }> = oldRes.data;
       const draftEmails = new Set(recipDrafts.map(r => r.recipient_email.toLowerCase()));
       for (const o of oldList) {
         if (!draftEmails.has(o.recipient_email.toLowerCase()) && (o as { id: number }).id) {
@@ -615,11 +653,20 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
       }
     }
 
-    if (values.drive_link) {
-      await addTaskAttachmentLink(taskId, values.drive_link as string);
+    // Link Drive: chỉ thêm nếu chưa có, và xoá ô nhập sau khi lưu để lần save sau
+    // (auto-save/retry) không chèn thêm một dòng link trùng.
+    const driveLink = String(values.drive_link || '').trim();
+    if (driveLink) {
+      const alreadyLinked = existingFiles.some(f => f.file_url === driveLink);
+      if (!alreadyLinked) {
+        const linkRes = await addTaskAttachmentLink(taskId, driveLink);
+        if (!linkRes?.success) throw new Error(linkRes?.message || 'Lưu link tài liệu thất bại');
+        if (linkRes.data) setExistingFiles(prev => [...prev, linkRes.data]);
+      }
+      form.setFieldsValue({ drive_link: '' });
     }
 
-    // Đồng bộ phân công SV: thêm mới bulk, gỡ cái bị bỏ chọn (chỉ khi sửa)
+    // Đồng bộ phân công SV: thêm mới bulk, gỡ cái bị bỏ chọn (cả task vừa tạo ở lần trước)
     const partRes = await getTaskParticipants(taskId);
     const oldParts: Array<{ id: number; student_id: string }> = partRes.success ? partRes.data : [];
     const oldIds = new Set(oldParts.map(p => p.student_id));
@@ -628,7 +675,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     if (toAdd.length > 0) {
       await addTaskParticipants(taskId, toAdd);
     }
-    if (editingId) {
+    if (isExistingTask) {
       for (const p of oldParts) {
         if (!newIds.has(p.student_id)) {
           await deleteParticipant(p.id);
@@ -642,7 +689,11 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
         const actualFile = file.originFileObj || file;
         formData.append('files', actualFile as unknown as Blob);
       });
-      await uploadTaskFiles(taskId, formData);
+      const uploadRes = await uploadTaskFiles(taskId, formData);
+      if (!uploadRes?.success) throw new Error(uploadRes?.message || 'Tải file đính kèm thất bại');
+      // File đã lên server → chuyển sang danh sách file hiện có để không upload lại
+      setExistingFiles(prev => [...prev, ...(uploadRes.data || [])]);
+      setFileList([]);
     }
     return taskId;
   };
@@ -650,16 +701,33 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
   // Chống lưu chồng (bấm tay đúng lúc auto-save chạy và ngược lại)
   const busyRef = useRef(false);
 
+  // Lưu nháp: task mới → 'Nháp'; task đã gửi/kết thúc giữ nguyên trạng thái
+  // (tránh sửa nội dung xong lại làm task rơi khỏi danh sách điểm danh).
+  const draftStatus = () =>
+    loadedStatusRef.current === 'Đã gửi' || loadedStatusRef.current === 'Kết thúc'
+      ? loadedStatusRef.current
+      : 'Nháp';
+
   const handleSaveDraft = async () => {
     if (busyRef.current) return;
     busyRef.current = true;
     setSaving(true);
     try {
-      await persistTask('Đã soạn');
-      message.success('Đã lưu nháp (trạng thái: Đã soạn)');
+      // Nháp chỉ cần Tiêu đề; Học kỳ/Deadline để trống, điền sau khi Gửi
+      await persistTask(draftStatus(), { lenient: true });
       done();
-    } catch {
-      message.error('Có lỗi khi lưu nháp!');
+    } catch (e) {
+      // Chỉ thiếu Tiêu đề (DB bắt buộc) → báo ngay tại ô, không hiện toast
+      const err = e as { errorFields?: Array<{ name?: (string | number)[] }> };
+      if (err.errorFields?.length) {
+        form.setFields(err.errorFields.map(f => ({
+          name: (f.name || []) as (string | number)[],
+          errors: ['Vui lòng nhập tiêu đề'],
+        })));
+        form.scrollToField('title');
+      } else {
+        message.error(apiErrorMessage(e, 'Có lỗi khi lưu nháp!'));
+      }
     } finally { setSaving(false); busyRef.current = false; }
   };
 
@@ -669,25 +737,32 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     busyRef.current = true;
     setSaving(true);
     try {
-      const taskId = await persistTask('Đã soạn');
-      const res = await sendTaskEmail(taskId, 'Gửi lần đầu');
+      const taskId = await persistTask(draftStatus());
+      const res = await sendTaskEmail(taskId, 'Gửi lần đầu', includeAssignments);
       if (!res.success) throw new Error(res.message || 'Gửi thất bại');
-      message.success(`Đã gửi email tới ${res.data.length} người nhận`);
+      const att = res.attachments as { sent?: number; links?: number; skipped?: string[] } | undefined;
+      message.success(`Đã gửi email tới ${res.data.length} người nhận${att?.sent ? `, kèm ${att.sent} file` : ''}`);
+      if (att?.skipped?.length) message.warning(`Không đính kèm được (file mất trên máy chủ): ${att.skipped.join(', ')}`, 6);
       done();
     } catch (e) {
-      message.error((e as Error).message || 'Có lỗi khi gửi email!');
+      message.error(apiErrorMessage(e, 'Có lỗi khi gửi email!'), 6);
     } finally { setSaving(false); busyRef.current = false; }
   };
 
   // Tab cha gọi khi rời mục: tự Lưu nháp nếu dở (đúng luật dirty), thiếu field thì bỏ qua + lý do
   const autoSave = async (): Promise<AutoSaveResult> => {
-    const tabTitle = String(form.getFieldValue('title') || '').trim() || 'Nháp chưa tên';
+    const tabTitle = String(form.getFieldValue('title') || '').trim() || DEFAULT_TITLE;
     if (busyRef.current || saving) return { saved: false, title: tabTitle, skipped: 'đang lưu dở' };
-    if (loading) return { saved: false, title: tabTitle };
+    if (loading) return { saved: false, title: tabTitle, skipped: 'đang tải công việc' };
     if (!computeConfirmNeeded()) return { saved: false, title: tabTitle };
     busyRef.current = true;
     try {
-      const taskId = await persistTask('Đã soạn', { lenient: true });
+      const taskId = await persistTask(draftStatus(), { lenient: true });
+      // Đã lưu → chụp lại ảnh gốc để lần sau không coi là còn thay đổi
+      initFormRef.current = snapForm(form.getFieldsValue());
+      initRecipsRef.current = recipDrafts.map(r => r.recipient_email.toLowerCase());
+      initSelectedRef.current = [...selectedStudents];
+      onDirtyRef.current?.(false);
       return { saved: true, title: tabTitle, taskId };
     } catch (e) {
       const fields = (e as { errorFields?: Array<{ name?: (string | number)[] }> })?.errorFields
@@ -699,7 +774,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
   useImperativeHandle(ref, () => ({ autoSave }));
 
   const toggleCc = (on: boolean) => {
-    setCcOn(on);
+    ccUserTouched.current = true;
     if (on) {
       setRecipDrafts(prev => {
         const existing = new Set(prev.map(r => r.recipient_email.toLowerCase()));
@@ -718,6 +793,8 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
 
   // Chia tags người nhận: cụm To (Giảng viên / Lớp / Khác) + cụm Cc
   const ccDrafts = recipDrafts.filter(r => r.kind === 'cc');
+  // Nút CC bật/tắt theo đúng dữ liệu đã lưu: có dòng kind='cc' = bật
+  const ccOn = ccDrafts.length > 0;
   // Thu gọn khối To: mỗi khối hiện 3 tags đầu + "+N nữa"; 1 nút bung tất cả. Cc giữ nguyên.
   const COLLAPSED_N = 3;
   const [recipExpanded, setRecipExpanded] = useState(false);
@@ -741,8 +818,23 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
   const actionButtons = (
     <>
       <Button block icon={<SaveOutlined />} loading={saving} onClick={handleSaveDraft}>Lưu nháp</Button>
+      <Checkbox checked={includeAssignments} onChange={e => setIncludeAssignments(e.target.checked)} style={{ marginLeft: 0, fontSize: 13 }}>
+        Kèm bảng phân công trong email
+      </Checkbox>
       <Button block type="primary" icon={<SendOutlined />} loading={saving} onClick={handleSend}>Gửi</Button>
     </>
+  );
+
+  // Bảng preview đúng thứ tự email: lớp → tên → MSSV (giống ORDER BY backend)
+  const selectedStudentRows: StudentRow[] = useMemo(
+    () => selectedStudents
+      .map(sid => allStudents.find(s => s.StudentID === sid) || { StudentID: sid, FirstName: '', LastName: '', ClassStudentID: '' })
+      .sort((a, b) =>
+        (a.ClassStudentID || '').localeCompare(b.ClassStudentID || '') ||
+        `${a.FirstName} ${a.LastName}`.localeCompare(`${b.FirstName} ${b.LastName}`, 'vi') ||
+        a.StudentID.localeCompare(b.StudentID)
+      ),
+    [selectedStudents, allStudents]
   );
 
   if (loading) {
@@ -830,7 +922,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
                 />
               </Form.Item>
               <Form.Item name="content" noStyle>
-                <EmailEditor />
+                <EmailEditor assignmentRows={includeAssignments ? selectedStudentRows : []} />
               </Form.Item>
             </Card>
 
@@ -852,7 +944,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
                   value={undefined}
                 />
                 {recipDrafts.length > 0 && (
-                  <Button size="small" danger onClick={() => { setRecipDrafts([]); setCcOn(false); message.info('Đã xóa hết người nhận (kể cả Cc)'); }}>
+                  <Button size="small" danger onClick={() => { setRecipDrafts([]); message.info('Đã xóa hết người nhận (kể cả Cc)'); }}>
                     Xóa hết
                   </Button>
                 )}
@@ -952,6 +1044,8 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
                     locale={{ emptyText: assignClasses.length === 0 && !showAllClasses ? 'Chọn ít nhất 1 lớp để thấy danh sách sinh viên' : 'Không tìm thấy sinh viên' }}
                     rowSelection={{
                       selectedRowKeys: selectedStudents,
+                      // Giữ lựa chọn khi đổi lọc lớp / chuyển trang — SV ngoài view không bị rơi khỏi state
+                      preserveSelectedRowKeys: true,
                       onChange: (keys) => setSelectedStudents(keys as string[]),
                     }}
                     columns={[
@@ -986,11 +1080,8 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
               <Form.Item name="remind_before_days" label="Nhắc trước hạn (ngày)" style={{ marginBottom: 12 }}>
                 <InputNumber min={0} max={30} style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item name="priority" label="Ưu tiên" style={{ marginBottom: 12 }}>
+              <Form.Item name="priority" label="Ưu tiên" style={{ marginBottom: 0 }}>
                 <Select options={[{ value: 'Cao', label: 'Cao' }, { value: 'Bình thường', label: 'Bình thường' }, { value: 'Thấp', label: 'Thấp' }]} />
-              </Form.Item>
-              <Form.Item name="status" label="Trạng thái (tự động khi Gửi)" style={{ marginBottom: 0 }}>
-                <Select options={STATUS_OPTIONS.map(s => ({ value: s, label: s }))} />
               </Form.Item>
             </Card>
 
@@ -1087,19 +1178,18 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
       <DirectoryModal
         open={directoryOpen}
         onClose={() => setDirectoryOpen(false)}
-        teachers={teachers}
-        classes={classes.map(c => ({ class_code: c.class_code, email: c.email }))}
+        teachers={teachers.filter(t => t.email) as Array<{ id: number; full_name: string; email: string }>}
+        classes={classes.filter(c => c.email).map(c => ({ class_code: c.class_code, email: c.email }))}
         ccList={ccList}
         usingFallback={usingFallback}
+        onAddRecipients={items => bulkAdd(items, `${items.length} người từ danh bạ`)}
+        onRemove={removeDirEntries}
         onAddTeacher={dirAddTeacher}
         onUpdateTeacher={dirUpdateTeacher}
-        onDeleteTeacher={dirDeleteTeacher}
         onAddClass={dirAddClass}
         onUpdateClassEmail={dirUpdateClassEmail}
-        onDeleteClass={dirDeleteClass}
         onAddCc={dirAddCc}
         onUpdateCc={dirUpdateCc}
-        onDeleteCc={dirDeleteCc}
       />
     </div>
   );

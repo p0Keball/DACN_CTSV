@@ -6,7 +6,7 @@
 CREATE TABLE IF NOT EXISTS teachers (
     id SERIAL PRIMARY KEY,
     full_name VARCHAR(100) NOT NULL,
-    email VARCHAR(100) UNIQUE NOT NULL,
+    email VARCHAR(100) UNIQUE, -- cho phép NULL: gỡ khỏi danh bạ = xoá hòm thư (giữ GV + phân công GVCN)
     phone VARCHAR(20),
     department VARCHAR(100) DEFAULT 'Khoa Công nghệ Thông tin',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -60,11 +60,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     content TEXT,                         -- Trích yếu / Nội dung chi tiết
     deadline TIMESTAMP WITH TIME ZONE,    -- Thời hạn xử lý / Thời gian diễn ra
     priority VARCHAR(20) DEFAULT 'Bình thường', -- Thấp, Bình thường, Cao
-    status VARCHAR(30) DEFAULT 'Mới tạo', -- Vòng đời email (§3.1): Mới tạo, Đã soạn, Đã gửi, Chờ phản hồi, Đang xử lý, Kết thúc, Quá hạn
+    status VARCHAR(30) DEFAULT 'Nháp', -- 3 trạng thái: Nháp / Đã gửi / Kết thúc (Đã gửi tự -> Kết thúc khi quá deadline)
     source VARCHAR(50) DEFAULT 'Thủ công', -- E-Office, Thủ công, OCR PDF
     semester VARCHAR(20),                 -- Học kỳ (VD: HK1 2026-2027)
+    eoffice_id VARCHAR(100),              -- Id văn bản eOffice gốc: dedupe, bấm "Tạo công việc" lại không nhân đôi task
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (eoffice_id)                   -- 1 văn bản eOffice chỉ tạo 1 công việc
 );
 ```
 
@@ -92,7 +94,8 @@ CREATE TABLE IF NOT EXISTS task_attachments (
     file_name VARCHAR(255) NOT NULL,
     file_url TEXT NOT NULL,               -- Đường dẫn tải file / Supabase Storage
     file_size VARCHAR(50),
-    file_type VARCHAR(50),                -- pdf, docx, xlsx, img...
+    file_type TEXT,                       -- MIME đầy đủ (xlsx/docx có MIME 65–73 ký tự; đừng để VARCHAR(50))
+    file_hash VARCHAR(64),                -- SHA-256 nội dung file: trùng nội dung thì tái dùng file cũ (anti-waste)
     uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -154,6 +157,54 @@ CREATE TABLE IF NOT EXISTS cc_contacts (
 ```
 ---
 
+## Migration (chạy trên Supabase nếu DB đã tạo từ trước)
+
+```sql
+-- Cho phép teachers.email = NULL: "gỡ khỏi danh bạ" chỉ xoá hòm thư, giữ GV + phân công GVCN
+ALTER TABLE teachers ALTER COLUMN email DROP NOT NULL;
+
+-- file_type phải chứa MIME đầy đủ: .xlsx/.docx/.pptx có MIME 65–73 ký tự,
+-- VARCHAR(50) cũ làm INSERT lỗi "value too long" (mất file khi tạo từ eOffice/upload tay)
+ALTER TABLE task_attachments ALTER COLUMN file_type TYPE TEXT;
+
+-- Rút trạng thái công việc về 3 giá trị: Nháp / Đã gửi / Kết thúc
+UPDATE tasks SET status='Nháp'     WHERE status IN ('Mới','Mới tạo','Lưu nháp','Đã soạn');
+UPDATE tasks SET status='Đã gửi'   WHERE status IN ('Chờ phản hồi','Đang xử lý','Quá hạn');
+UPDATE tasks SET status='Kết thúc' WHERE status IN ('Hoàn thành','Kết thúc');
+
+ALTER TABLE tasks ALTER COLUMN status SET DEFAULT 'Nháp';
+ALTER TABLE tasks ADD CONSTRAINT tasks_status_chk
+  CHECK (status IN ('Nháp','Đã gửi','Kết thúc'));
+
+-- Đóng ngay các task đã gửi mà đã quá deadline (đồng bộ với auto-close trong server)
+UPDATE tasks SET status='Kết thúc'
+WHERE status='Đã gửi' AND deadline IS NOT NULL AND deadline < now();
+
+-- eOffice dedupe: lưu id văn bản gốc trên task — bấm "Tạo công việc" lại = đồng bộ file, không nhân đôi
+-- (nếu cột/index đã tồn tại trên Supabase với tên khác thì bỏ qua 2 lệnh dưới)
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS eoffice_id VARCHAR(100);
+CREATE UNIQUE INDEX IF NOT EXISTS tasks_eoffice_id_key ON tasks (eoffice_id);
+
+-- Chống trùng file: SHA-256 nội dung — upload tay / eOffice cùng nội dung thì tái dùng file cũ
+ALTER TABLE task_attachments ADD COLUMN IF NOT EXISTS file_hash VARCHAR(64);
+CREATE INDEX IF NOT EXISTS task_attachments_file_hash_idx ON task_attachments (file_hash);
+```
+
+---
+
+## Tài khoản admin (bắt buộc trước khi dùng lần đầu)
+
+Bảng `users` trống thì không đăng nhập được (mọi POST/PUT/DELETE đều yêu cầu Bearer token). Chạy một lần:
+
+```bash
+cd backend
+node setup-admin.js   # tạo / cập nhật tài khoản admin/admin123 (bcrypt, salt 10)
+```
+
+- Nên đặt `JWT_SECRET` trong `backend/.env` — backend đang rớt về `dev-secret-change-me` khi thiếu (chỉ dùng cho dev).
+- Đổi mật khẩu: mở `setup-admin.js`, sửa hằng `'admin123'` rồi chạy lại (script upsert theo username, an toàn chạy nhiều lần).
+---
+
 ## Dữ liệu mẫu (Sample Data)
 
 ### Giảng viên / GVCN mẫu
@@ -179,6 +230,8 @@ VALUES
 ```sql
 INSERT INTO tasks (title, content, deadline, priority, status, source, semester)
 VALUES
-('Lễ khai giảng năm học 2026-2027', 'Huy động sinh viên tham dự lễ khai giảng tại Hội trường A32', '2026-09-05 07:15:00+07', 'Cao', 'Đang xử lý', 'E-Office', 'HK1 2026-2027'),
-('Danh sách sinh viên khen thưởng cấp Khoa', 'Rà soát và đề xuất danh sách khen thưởng nhân dịp Lễ Khai giảng', '2026-09-04 23:59:00+07', 'Bình thường', 'Mới', 'E-Office', 'HK1 2026-2027');
+('Lễ khai giảng năm học 2026-2027', 'Huy động sinh viên tham dự lễ khai giảng tại Hội trường A32', '2026-09-05 07:15:00+07', 'Cao', 'Đã gửi', 'E-Office', 'HK1 2026-2027'),
+('Danh sách sinh viên khen thưởng cấp Khoa', 'Rà soát và đề xuất danh sách khen thưởng nhân dịp Lễ Khai giảng', '2026-09-04 23:59:00+07', 'Bình thường', 'Nháp', 'E-Office', 'HK1 2026-2027');
+-- Lưu ý: KHÔNG insert mẫu với trạng thái cũ ('Mới', 'Đang xử lý', 'Quá hạn'...) —
+-- migration đã thêm constraints CHECK chỉ nhận 'Nháp' / 'Đã gửi' / 'Kết thúc'.
 ```

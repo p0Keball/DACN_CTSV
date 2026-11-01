@@ -18,7 +18,6 @@ export interface Task {
 export interface TaskStats {
   processing?: number;
   pending?: number;
-  overdue?: number;
   completed?: number;
 }
 

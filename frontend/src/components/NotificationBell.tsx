@@ -90,7 +90,7 @@ const NotificationBell: React.FC = () => {
       }
       // Công việc mới tạo/gửi trong 7 ngày (có deadline hoặc không)
       const created = (t as Task & { created_at?: string }).created_at;
-      if (['Mới tạo', 'Mới', 'Đã soạn', 'Đã gửi'].includes(t.status || '') && (!created || dayjs(created).isAfter(now.subtract(7, 'day')))) {
+      if (['Nháp', 'Đã gửi'].includes(t.status || '') && (!created || dayjs(created).isAfter(now.subtract(7, 'day')))) {
         list.push({ id: `new-${t.id}`, taskId: t.id, kind: 'new', title: t.title, deadline: t.deadline, priority: t.priority, status: t.status });
       }
     }
@@ -106,7 +106,9 @@ const NotificationBell: React.FC = () => {
   const openTask = (n: Notif) => {
     if (!readIds.has(n.id)) persist(new Set([...readIds, n.id]));
     setOpen(false);
-    navigate(`/cong-viec?search=${encodeURIComponent(n.title)}`);
+    // Deep-link bằng taskId: Tasks.tsx tự mở Drawer chi tiết (bấm lại từ chuông vẫn mở được),
+    // trước đây dùng ?search=<tên> chỉ lọc bảng, không mở được chi tiết.
+    navigate(`/cong-viec?taskId=${n.taskId}`);
   };
 
   const panel = (

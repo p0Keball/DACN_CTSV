@@ -30,11 +30,7 @@ const MonthlyReport: React.FC<MonthlyReportProps> = ({ tasks = [] }) => {
     return {
       total: tasksThisMonth.length,
       completed: tasksThisMonth.filter(t => t.status === 'Kết thúc').length,
-      processing: tasksThisMonth.filter(t => t.status === 'Đang xử lý').length,
-      overdue: tasksThisMonth.filter(t => {
-        if (t.status === 'Kết thúc' || !t.deadline) return false;
-        return new Date(t.deadline) < now;
-      }).length
+      processing: tasksThisMonth.filter(t => t.status === 'Đã gửi').length
     };
   }, [tasks]);
 
@@ -65,13 +61,8 @@ const MonthlyReport: React.FC<MonthlyReportProps> = ({ tasks = [] }) => {
         </div>
         
         <div style={cardStyle}>
-          <span style={{ color: '#8c8c8c', fontSize: '13px' }}>Đang xử lý</span>
+          <span style={{ color: '#8c8c8c', fontSize: '13px' }}>Đã gửi</span>
           <h2 style={{ margin: 0, fontSize: '24px' }}>{stats.processing}</h2>
-        </div>
-        
-        <div style={cardStyle}>
-          <span style={{ color: '#8c8c8c', fontSize: '13px' }}>Quá hạn</span>
-          <h2 style={{ margin: 0, fontSize: '24px', color: '#f5222d' }}>{stats.overdue}</h2>
         </div>
 
         {/* 2 Ô này chờ tích hợp API Sinh viên / DLU Proxy */}

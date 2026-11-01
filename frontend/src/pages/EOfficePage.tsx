@@ -76,11 +76,22 @@ const EOfficePage: React.FC = () => {
     try {
       const res = await createTaskFromEoffice(detail.id);
       if (!res.success) throw new Error(res.message);
+      const att = (res.attachments || {}) as {
+        added?: number;
+        existing?: number;
+        skipped?: Array<{ fileName: string; reason: string }>;
+      };
+      const added = att.added ?? 0;
+      const skipped = att.skipped ?? [];
       if (res.existed) {
-        message.info('Văn bản này đã tạo công việc từ trước — mở công việc cũ');
+        if (added > 0) message.success(`Đã đồng bộ thêm ${added} file đính kèm cho công việc đã tạo`);
+        else message.info('Văn bản này đã có công việc — không có file mới cần tải');
       } else {
-        const { added = 0, skipped = [] } = res.attachments || {};
-        message.success(`Đã tạo công việc + tải ${added} file đính kèm${skipped.length ? ` (${skipped.length} file bỏ qua)` : ''}`);
+        message.success(`Đã tạo công việc + tải ${added} file đính kèm`);
+      }
+      if (skipped.length > 0) {
+        const detailText = skipped.slice(0, 5).map(s => `${s.fileName} (${s.reason})`).join('; ');
+        message.warning(`Bỏ qua ${skipped.length} file: ${detailText}${skipped.length > 5 ? '…' : ''}`, 10);
       }
       setDrawerOpen(false);
       navigate('/cong-viec', { state: { openEditTaskId: res.data.id } });

@@ -30,7 +30,7 @@ const fmtTime = (iso: string) => {
 const priorityColor = (p: string) =>
   p === 'Cao' ? 'red' : p === 'Bình thường' ? 'orange' : 'green';
 const statusColor = (s: string) =>
-  s === 'Kết thúc' ? 'success' : s === 'Đang xử lý' ? 'processing' : 'default';
+  s === 'Kết thúc' ? 'success' : s === 'Đã gửi' ? 'processing' : 'default';
 
 // Khối "Công việc gần đây": 2 cột — trái là lịch tháng này,
 // di chuột / bấm vào ô ngày thì cột phải hiện công việc của ngày đó.

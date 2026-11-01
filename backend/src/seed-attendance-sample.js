@@ -29,7 +29,7 @@ async function main() {
        ('TEST_DIEMDANH_01 Lễ khai giảng (mẫu test)', 'Task Kết thúc để test điểm danh', NOW() - INTERVAL '10 days', 'Cao', 'Kết thúc', 'Thủ công', 'HK1 2026-2027'),
        ('TEST_DIEMDANH_02 Họp lớp tháng 9 (mẫu test)', 'Task Kết thúc để test điểm danh', NOW() - INTERVAL '5 days', 'Bình thường', 'Kết thúc', 'Thủ công', 'HK1 2026-2027'),
        ('TEST_DIEMDANH_03 Ngoại khóa (mẫu test)', 'Task Kết thúc để test điểm danh', NOW() - INTERVAL '2 days', 'Bình thường', 'Kết thúc', 'Thủ công', 'HK1 2026-2027'),
-       ('TEST_DIEMDANH_04 Chưa diễn ra (đối chứng)', 'Task Đang xử lý — panel điểm danh phải ẨN task này', NOW() + INTERVAL '5 days', 'Bình thường', 'Đang xử lý', 'Thủ công', 'HK1 2026-2027')
+       ('TEST_DIEMDANH_04 Chưa diễn ra (đối chứng)', 'Task Đã gửi — panel điểm danh phải ẨN task này', NOW() + INTERVAL '5 days', 'Bình thường', 'Đã gửi', 'Thủ công', 'HK1 2026-2027')
      RETURNING id, title, status`
   );
   const byTitle = Object.fromEntries(ins.rows.map((r) => [r.title.split(' ')[0], r.id]));

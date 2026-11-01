@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Table, Button, Space, Card, message, Popconfirm, Tag, Divider, Drawer, Tabs, Descriptions, Select, Input, DatePicker } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, CheckCircleOutlined, RollbackOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import DOMPurify from 'dompurify';
 import {
-  getTasks, deleteTask,
+  getTasks, getTask, deleteTask, setTaskStatus,
   getTaskAttachments, getTaskRecipients, getTaskHistory,
-  getTaskParticipants, updateParticipant, deleteParticipant,
+  getTaskParticipants,
 } from '../services/api';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { statusColor, PARTICIPANT_STATUSES } from '../types';
+import { statusColor } from '../types';
 import type { Task, Recipient, Attachment, HistoryRow, Participant } from '../types';
 
 interface TasksListProps {
@@ -39,6 +39,7 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
   // Deep-link từ Lịch / Hồ sơ SV / Thông báo: ?taskId=... → tự mở Drawer chi tiết
   const taskIdParam = searchParams.get('taskId');
   const autoOpened = useRef<string | null>(null);
+  const fetchedForDeepLink = useRef<string | null>(null);
 
   // Bộ lọc toolbar (lọc ở backend, cộng dồn): tên + tháng deadline + có/không phân công
   const [fSearch, setFSearch] = useState('');
@@ -88,16 +89,37 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
     } catch { message.error('Không tải được chi tiết công việc'); }
   }, []);
 
-  // ?taskId=... (từ Lịch / Hồ sơ SV / chuông thông báo) → mở Drawer khi bảng đã tải xong
+  // ?taskId=... (từ Lịch / Hồ sơ SV / chuông thông báo) → mở Drawer khi bảng đã tải xong.
+  // Nếu task không nằm trong danh sách đang lọc (hoặc bảng chưa kịp tải) thì tải thẳng
+  // đúng task đó 1 lần — trước đây chỉ tìm trong `tasks` nên link có thể không mở được.
   useEffect(() => {
-    if (!taskIdParam) { autoOpened.current = null; return; }
+    if (!taskIdParam) {
+      autoOpened.current = null;
+      fetchedForDeepLink.current = null;
+      return;
+    }
     if (autoOpened.current === taskIdParam) return;
     const found = tasks.find(t => String(t.id) === taskIdParam);
-    if (!found) return;
-    autoOpened.current = taskIdParam;
-    Promise.resolve()
-      .then(() => openAssignDrawer(found))
-      .catch(() => undefined);
+    if (found) {
+      autoOpened.current = taskIdParam;
+      Promise.resolve()
+        .then(() => openAssignDrawer(found))
+        .catch(() => undefined);
+      return;
+    }
+    if (fetchedForDeepLink.current === taskIdParam) return;
+    fetchedForDeepLink.current = taskIdParam;
+    (async () => {
+      try {
+        const res = await getTask(Number(taskIdParam));
+        if (res.success && res.data) {
+          autoOpened.current = taskIdParam;
+          await openAssignDrawer(res.data);
+        }
+      } catch {
+        message.error('Không tìm thấy công việc (có thể đã bị xóa)');
+      }
+    })();
   }, [taskIdParam, tasks, openAssignDrawer]);
 
   // Đóng Drawer thì gỡ taskId khỏi URL để bấm lại link đó vẫn mở được
@@ -111,33 +133,22 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
     }
   };
 
-  const reloadParticipants = async (taskId: number) => {
-    try {
-      const res = await getTaskParticipants(taskId);
-      if (res.success) setParticipants(res.data);
-    } catch { message.error('Không tải được danh sách phân công'); }
-  };
-
-  const handleParticipantStatus = async (p: Participant, status: string) => {
-    const res = await updateParticipant(p.id, { status });
-    if (res.success) {
-      message.success(`Đã cập nhật ${p.student_id} → ${status}`);
-      if (currentAssignTask) reloadParticipants(currentAssignTask.id);
-    } else message.error('Lỗi khi cập nhật trạng thái');
-  };
-
-  const handleParticipantDelete = async (p: Participant) => {
-    const res = await deleteParticipant(p.id);
-    if (res.success) {
-      message.success(`Đã gỡ ${p.student_id} khỏi phân công`);
-      if (currentAssignTask) reloadParticipants(currentAssignTask.id);
-    } else message.error('Lỗi khi gỡ phân công');
-  };
-
   const handleDelete = async (id: number) => {
     const res = await deleteTask(id);
     if (res.success) { message.success('Xóa thành công!'); loadTasks(); }
     else message.error('Lỗi khi xóa');
+  };
+
+  // Kết thúc / Mở lại. Mở lại task đã quá deadline sẽ bị auto-close lại ngay → chặn trước.
+  const handleToggleStatus = async (task: Task) => {
+    const next = task.status === 'Kết thúc' ? 'Đã gửi' : 'Kết thúc';
+    if (next === 'Đã gửi' && task.deadline && dayjs(task.deadline).isBefore(dayjs())) {
+      message.warning('Deadline đã qua — hãy đổi deadline trước khi mở lại, nếu không công việc sẽ tự Kết thúc lại.');
+      return;
+    }
+    const res = await setTaskStatus(task.id, next);
+    if (res.success) { message.success(next === 'Kết thúc' ? 'Đã Kết thúc công việc' : 'Đã mở lại công việc'); loadTasks(); }
+    else message.error('Không đổi được trạng thái');
   };
 
   const columns = [
@@ -154,8 +165,25 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
       }
     },
     { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (status: string) => <Tag color={statusColor(status)}>{status}</Tag> },
-    { title: 'Thao tác', key: 'action', width: '12%', render: (_: unknown, record: Task) => (
-        <Space size="middle">
+    { title: 'Thao tác', key: 'action', width: '14%', render: (_: unknown, record: Task) => (
+        <Space size="small">
+          {record.status === 'Kết thúc' ? (
+            <Button
+              type="link"
+              icon={<RollbackOutlined />}
+              title="Mở lại công việc"
+              onClick={(e) => { e.stopPropagation(); handleToggleStatus(record); }}
+            />
+          ) : (
+            <Popconfirm title="Đánh dấu công việc đã Kết thúc?" onConfirm={() => handleToggleStatus(record)}>
+              <Button
+                type="link"
+                icon={<CheckCircleOutlined />}
+                title="Kết thúc công việc"
+                onClick={(e) => e.stopPropagation()}
+              />
+            </Popconfirm>
+          )}
           <Button type="link" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); onEdit(record); }} />
           <Popconfirm title="Xóa công việc này?" onConfirm={() => handleDelete(record.id)}>
             <Button type="link" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
@@ -291,33 +319,12 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
                   pagination={false}
                   rowKey="id"
                   columns={[
-                    { title: 'MSSV', dataIndex: 'student_id', width: 110 },
+                    { title: 'MSSV', dataIndex: 'student_id', width: 120 },
                     {
                       title: 'Họ tên',
                       render: (_: unknown, r: Participant) => `${r.FirstName || ''} ${r.LastName || ''}`.trim() || '—',
                     },
-                    { title: 'Lớp', dataIndex: 'class_code', width: 90 },
-                    {
-                      title: 'Trạng thái tham gia',
-                      width: 170,
-                      render: (_: unknown, r: Participant) => (
-                        <Select
-                          size="small"
-                          style={{ width: '100%' }}
-                          value={r.status}
-                          options={PARTICIPANT_STATUSES.map(s => ({ value: s, label: s }))}
-                          onChange={(v) => handleParticipantStatus(r, v)}
-                        />
-                      ),
-                    },
-                    {
-                      title: '', width: 50,
-                      render: (_: unknown, r: Participant) => (
-                        <Popconfirm title={`Gỡ ${r.student_id} khỏi phân công?`} onConfirm={() => handleParticipantDelete(r)}>
-                          <Button type="link" danger size="small">Gỡ</Button>
-                        </Popconfirm>
-                      ),
-                    },
+                    { title: 'Lớp', dataIndex: 'class_code', width: 120, render: (v: string, r: Participant) => v || r.ClassStudentID || '—' },
                   ]}
                   dataSource={participants}
                   locale={{ emptyText: 'Chưa phân công sinh viên nào — thêm ở trang Soạn' }}

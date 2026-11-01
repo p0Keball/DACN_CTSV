@@ -13,8 +13,8 @@ interface Task {
 interface MonthCount {
   name: string;
   'Kết thúc': number;
-  'Đang xử lý': number;
-  'Mới': number;
+  'Đã gửi': number;
+  'Nháp': number;
 }
 
 interface ChartsProps {
@@ -42,11 +42,11 @@ const Charts: React.FC<ChartsProps> = ({ tasks = [] }) => {
       const date = new Date(task.deadline);
       const monthYear = `T${date.getMonth() + 1}/${date.getFullYear()}`;
       if (!acc[monthYear]) {
-        acc[monthYear] = { name: monthYear, 'Kết thúc': 0, 'Đang xử lý': 0, 'Mới': 0 };
+        acc[monthYear] = { name: monthYear, 'Kết thúc': 0, 'Đã gửi': 0, 'Nháp': 0 };
       }
       if (task.status === 'Kết thúc') acc[monthYear]['Kết thúc'] += 1;
-      else if (task.status === 'Đang xử lý') acc[monthYear]['Đang xử lý'] += 1;
-      else acc[monthYear]['Mới'] += 1;
+      else if (task.status === 'Đã gửi') acc[monthYear]['Đã gửi'] += 1;
+      else acc[monthYear]['Nháp'] += 1;
       return acc;
     }, {});
     return Object.values(monthCounts);
@@ -63,8 +63,8 @@ const Charts: React.FC<ChartsProps> = ({ tasks = [] }) => {
             <Tooltip />
             <Legend />
             <Bar dataKey="Kết thúc" stackId="a" fill="#52c41a" />
-            <Bar dataKey="Đang xử lý" stackId="a" fill="#1890ff" />
-            <Bar dataKey="Mới" stackId="a" fill="#faad14" />
+            <Bar dataKey="Đã gửi" stackId="a" fill="#1890ff" />
+            <Bar dataKey="Nháp" stackId="a" fill="#faad14" />
           </BarChart>
         </ResponsiveContainer>
       </div>

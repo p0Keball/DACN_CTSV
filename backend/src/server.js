@@ -82,6 +82,14 @@ app.use('/uploads', express.static(uploadDir));
 
 const crypto = require('crypto');
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+// MIME của .xlsx/.docx/.pptx dài 65–73 ký tự. Cột file_type cũ là VARCHAR(50) nên
+// chèn thẳng sẽ lỗi "value too long" (từng làm mất 2 file .xlsx khi tạo từ eOffice).
+// Cắt an toàn 50 ký tự để chạy được cả trước khi chạy migration ALTER ... TYPE TEXT.
+const safeFileType = (mime, fileName) => {
+  const raw = String(mime || '').split(';')[0].trim().toLowerCase();
+  const val = raw || String(String(fileName || '').split('.').pop() || 'file').toLowerCase();
+  return val.slice(0, 50);
+};
 // Tên file vật lý từ URL đính kèm (chấp nhận cả raw space lẫn %20)
 const storedNameOf = (url) => {
   try { return decodeURIComponent(String(url || '').split('/').pop() || ''); }
@@ -192,22 +200,35 @@ app.post('/api/students/sync', async (req, res) => {
   }
 });
 
+// Tự đóng công việc đã gửi khi đã quá deadline: Đã gửi → Kết thúc.
+// Nháp không bị đóng (chưa gửi thì chưa coi là xong). Idempotent — gọi nhiều lần vô hại.
+async function closeExpiredTasks() {
+  try {
+    await pool.query(
+      `UPDATE tasks SET status = 'Kết thúc', updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'Đã gửi'
+         AND deadline IS NOT NULL
+         AND deadline < CURRENT_TIMESTAMP`
+    );
+  } catch (err) {
+    console.error('[auto-close] lỗi:', err.message);
+  }
+}
+
 // 2. API lấy thống kê tổng quan số lượng công việc
-// Status chuẩn (§3.1): Mới tạo / Đã soạn / Đã gửi / Chờ phản hồi / Đang xử lý / Kết thúc / Quá hạn
+// 3 trạng thái: Nháp / Đã gửi / Kết thúc. "Quá hạn" không còn là trạng thái.
 app.get('/api/tasks/stats', async (req, res) => {
   try {
+    await closeExpiredTasks();
     const query = `
       SELECT
-        COUNT(*) FILTER (WHERE status IN ('Mới', 'Mới tạo', 'Đang xử lý', 'Đã soạn', 'Đã gửi', 'Chờ phản hồi')) AS processing,
+        COUNT(*) FILTER (WHERE status = 'Đã gửi') AS processing,
         COUNT(*) FILTER (
-          WHERE status != 'Kết thúc' 
-          AND deadline::date >= CURRENT_DATE 
-          AND deadline::date <= CURRENT_DATE + INTERVAL '3 days'
+          WHERE status = 'Đã gửi'
+            AND deadline IS NOT NULL
+            AND deadline >= CURRENT_TIMESTAMP
+            AND deadline <= CURRENT_TIMESTAMP + INTERVAL '3 days'
         ) AS pending,
-        COUNT(*) FILTER (
-          WHERE status != 'Kết thúc' 
-          AND deadline::date < CURRENT_DATE
-        ) AS overdue,
         COUNT(*) FILTER (WHERE status = 'Kết thúc') AS completed
       FROM tasks;
     `;
@@ -261,6 +282,18 @@ app.get('/api/teachers', async (req, res) => {
 app.post('/api/teachers', async (req, res) => {
   const { full_name, email, phone } = req.body;
   try {
+    // GV từng bị "gỡ khỏi danh bạ" (cùng tên, email đang NULL) → khôi phục lại thay vì tạo trùng
+    const restore = await pool.query(
+      'SELECT id FROM teachers WHERE lower(full_name) = lower($1) AND email IS NULL LIMIT 1',
+      [full_name]
+    );
+    if (restore.rowCount > 0) {
+      await pool.query(
+        'UPDATE teachers SET email = $1, phone = COALESCE($2, phone) WHERE id = $3',
+        [email, phone || null, restore.rows[0].id]
+      );
+      return res.json({ success: true, data: { id: restore.rows[0].id, restored: true } });
+    }
     const result = await pool.query(
       'INSERT INTO teachers (full_name, email, phone) VALUES ($1, $2, $3) RETURNING *',
       [full_name, email, phone]
@@ -311,12 +344,23 @@ app.delete('/api/teachers/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
+// "Gỡ khỏi danh bạ" = chỉ xoá hòm thư, giữ nguyên GV + phân công GVCN
+app.delete('/api/teachers/:id/email', async (req, res) => {
+  try {
+    await pool.query('UPDATE teachers SET email = NULL WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
 
 // === CRUD LỚP HỌC ===
 app.post('/api/classes', async (req, res) => {
   try {
-    await pool.query('INSERT INTO classes (class_code, class_name, email) VALUES ($1, $2, $3)',
-      [req.body.class_code, req.body.class_name || `Lớp ${req.body.class_code}`, req.body.email || null]);
+    // Upsert: lớp đã tồn tại (vd lớp đồng bộ chưa có mail) thì chỉ cập nhật email, không tạo trùng
+    await pool.query(
+      `INSERT INTO classes (class_code, class_name, email) VALUES ($1, $2, $3)
+       ON CONFLICT (class_code) DO UPDATE SET email = EXCLUDED.email`,
+      [req.body.class_code, req.body.class_name || `Lớp ${req.body.class_code}`, req.body.email || null]
+    );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
@@ -333,6 +377,13 @@ app.put('/api/classes/:class_code', async (req, res) => {
 app.delete('/api/classes/:class_code', async (req, res) => {
   try {
     await pool.query('DELETE FROM classes WHERE class_code=$1', [req.params.class_code]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+// "Gỡ khỏi danh bạ" = chỉ xoá hòm thư lớp, giữ nguyên lớp + sinh viên (tránh cascade xoá SV)
+app.delete('/api/classes/:class_code/email', async (req, res) => {
+  try {
+    await pool.query('UPDATE classes SET email = NULL WHERE class_code = $1', [req.params.class_code]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
@@ -370,6 +421,7 @@ app.delete('/api/students/:id', async (req, res) => {
 // ?month=YYYY-MM (tháng deadline), ?assigned=1|0 (có/không phân công SV).
 app.get('/api/tasks', async (req, res) => {
   try {
+    await closeExpiredTasks();
     const { search, month, assigned } = req.query;
     const conds = [];
     const params = [];
@@ -400,7 +452,7 @@ app.post('/api/tasks', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO tasks (title, content, deadline, priority, status, source, semester, task_type, ref_doc_number, ref_issue_date, remind_before_days)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-      [title, content, deadline, priority || 'Bình thường', status || 'Mới tạo', source || 'Thủ công', semester, task_type || 'ThongBaoDon', ref_doc_number || null, ref_issue_date || null, remind_before_days ?? 0]
+      [title, content, deadline, priority || 'Bình thường', status || 'Nháp', source || 'Thủ công', semester, task_type || 'ThongBaoDon', ref_doc_number || null, ref_issue_date || null, remind_before_days ?? 0]
     );
     res.json({ success: true, data: result.rows[0] });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
@@ -415,6 +467,19 @@ app.put('/api/tasks/:id', async (req, res) => {
         remind_before_days=COALESCE($11, remind_before_days), updated_at=CURRENT_TIMESTAMP WHERE id=$12`,
       [title, content, deadline, priority, status, source, semester, task_type || null, ref_doc_number || null, ref_issue_date || null, remind_before_days ?? null, req.params.id]
     );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// Đổi nhanh trạng thái (Kết thúc / Mở lại) — chỉ nhận 3 trạng thái hợp lệ
+app.put('/api/tasks/:id/status', async (req, res) => {
+  const allowed = ['Nháp', 'Đã gửi', 'Kết thúc'];
+  const { status } = req.body;
+  if (!allowed.includes(status)) {
+    return res.status(400).json({ success: false, message: 'Trạng thái không hợp lệ' });
+  }
+  try {
+    await pool.query('UPDATE tasks SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [status, req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
@@ -438,17 +503,31 @@ app.get('/api/tasks/:taskId/attachments', async (req, res) => {
 });
 
 // 2. Lưu Link Google Docs / Trang tính
+// Idempotent: retry sau lỗi mạng không chèn trùng cùng 1 link vào cùng task.
 app.post('/api/tasks/:taskId/attachments/link', async (req, res) => {
+  const fileUrl = String(req.body.file_url || '').trim();
+  if (!fileUrl) return res.status(400).json({ success: false, message: 'Thiếu link tài liệu' });
   try {
+    const existing = await pool.query(
+      `SELECT * FROM task_attachments
+       WHERE task_id = $1 AND file_type = 'link' AND file_url = $2
+       ORDER BY id LIMIT 1`,
+      [req.params.taskId, fileUrl]
+    );
+    if (existing.rows[0]) {
+      return res.json({ success: true, data: existing.rows[0], existed: true });
+    }
     const result = await pool.query(
       'INSERT INTO task_attachments (task_id, file_name, file_url, file_type) VALUES ($1, $2, $3, $4) RETURNING *',
-      [req.params.taskId, 'Đường dẫn Tài liệu / Trang tính (Google Drive)', req.body.file_url, 'link']
+      [req.params.taskId, 'Đường dẫn Tài liệu / Trang tính (Google Drive)', fileUrl, 'link']
     );
-    res.json({ success: true, data: result.rows[0] });
+    res.json({ success: true, data: result.rows[0], existed: false });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-// 3. Upload File (PDF, Word) lưu vào local máy — trùng nội dung thì tái dùng file cũ
+// 3. Upload File (PDF, Word) lưu vào local máy — trùng nội dung thì tái dùng file cũ.
+// Kiểm tra trùng trong CÙNG task trước: retry sau lỗi upload (mất response, lỗi giữa
+// danh sách file) không tạo thêm dòng task_attachments cho cùng nội dung.
 app.post('/api/tasks/:taskId/attachments/file', upload.array('files'), async (req, res) => {
   try {
     const taskId = req.params.taskId;
@@ -459,10 +538,22 @@ app.post('/api/tasks/:taskId/attachments/file', upload.array('files'), async (re
       const displayName = Buffer.from(file.originalname, 'latin1').toString('utf8');
       const buffer = fs.readFileSync(file.path);
       const hash = sha256(buffer);
+
+      const sameTask = await pool.query(
+        'SELECT * FROM task_attachments WHERE task_id = $1 AND file_hash = $2 ORDER BY id LIMIT 1',
+        [taskId, hash]
+      );
+      if (sameTask.rows[0]) {
+        fs.unlinkSync(file.path);
+        attachments.push(sameTask.rows[0]);
+        deduped += 1;
+        continue;
+      }
+
       const existingUrl = await findByHash(hash);
       let fileUrl;
       if (existingUrl) {
-        fs.unlinkSync(file.path); // trùng nội dung: bỏ file mới, tái dùng file cũ
+        fs.unlinkSync(file.path); // trùng nội dung ở task khác: bỏ file mới, tái dùng file cũ
         fileUrl = existingUrl;
         deduped += 1;
       } else {
@@ -470,7 +561,7 @@ app.post('/api/tasks/:taskId/attachments/file', upload.array('files'), async (re
       }
       const result = await pool.query(
         'INSERT INTO task_attachments (task_id, file_name, file_url, file_size, file_type, file_hash) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-        [taskId, displayName, fileUrl, file.size.toString(), file.mimetype, hash]
+        [taskId, displayName, fileUrl, file.size.toString(), safeFileType(file.mimetype, displayName), hash]
       );
       attachments.push(result.rows[0]);
     }
@@ -561,7 +652,7 @@ app.get('/api/tasks/:taskId/history', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
-// === GỬI EMAIL (giai đoạn hiện tại: ghi log "Đã gửi", chưa gửi SMTP thật) ===
+// === GỬI EMAIL SMTP (To/Cc tách theo kind) ===
 app.post('/api/tasks/:taskId/send', async (req, res) => {
   try {
     const taskId = req.params.taskId;
@@ -572,6 +663,129 @@ app.post('/api/tasks/:taskId/send', async (req, res) => {
     if (recipRes.rows.length === 0) return res.status(400).json({ success: false, message: 'Chưa có người nhận nào. Hãy thêm người nhận trước khi gửi.' });
 
     const sendType = req.body.send_type || 'Gửi lần đầu';
+    const includeAssignments = req.body.include_assignments !== false; // mặc định bật
+    const toList = recipRes.rows.filter(r => (r.kind || 'to') !== 'cc').map(r => r.recipient_email);
+    const ccList = recipRes.rows.filter(r => r.kind === 'cc').map(r => r.recipient_email);
+
+    // Đính kèm file của công việc (§3.1: file kèm theo email khi gửi):
+    // file local gửi kèm thật; link Drive/Docs chèn thành danh sách link cuối body
+    // (không đính kèm được); file mất trên đĩa thì bỏ qua + báo lại.
+    const attRes = await pool.query('SELECT * FROM task_attachments WHERE task_id = $1 ORDER BY id', [taskId]);
+    const escHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const mailAttachments = [];
+    const linkItems = [];
+    const skippedFiles = [];
+    let attachBytes = 0;
+    for (const a of attRes.rows) {
+      if ((a.file_type || '') === 'link' || !isLocalUpload(a.file_url)) {
+        if (a.file_url) linkItems.push(`<li><a href="${escHtml(a.file_url)}">${escHtml(a.file_name || a.file_url)}</a></li>`);
+        continue;
+      }
+      const name = storedNameOf(a.file_url);
+      const full = name ? path.join(uploadDir, name) : '';
+      if (full && fs.existsSync(full)) {
+        attachBytes += fs.statSync(full).size;
+        mailAttachments.push({ filename: a.file_name || name, path: full });
+      } else {
+        skippedFiles.push(a.file_name || name || 'file');
+      }
+    }
+    const MAX_ATTACH = 25 * 1024 * 1024; // Gmail chặn email > 25MB
+    if (attachBytes > MAX_ATTACH) {
+      return res.status(400).json({
+        success: false,
+        message: `Tổng file đính kèm ${(attachBytes / 1024 / 1024).toFixed(1)}MB vượt giới hạn 25MB của Gmail — gỡ bớt file rồi gửi lại.`,
+      });
+    }
+    // Chèn bảng phân công vào TRƯỚC đoạn kết (Kính mong/Kính nhờ/Trân trọng cảm ơn)
+    // để bảng không nằm sau lời kết. Không tìm thấy mốc → nối cuối như cũ.
+    const insertBeforeClosing = (html, block) => {
+      const markers = ['Kính mong', 'Kính nhờ', 'Trân trọng cảm ơn', 'Trân trọng.'];
+      for (const marker of markers) {
+        let idx = -1;
+        let from = 0;
+        while (true) {
+          const found = html.indexOf(marker, from);
+          if (found === -1) break;
+          idx = found;
+          from = found + marker.length;
+        }
+        if (idx === -1) continue;
+        const pStart = html.lastIndexOf('<p', idx);
+        if (pStart !== -1) {
+          const tagEnd = html.indexOf('>', pStart);
+          const lastClose = html.lastIndexOf('</p>', idx);
+          if (tagEnd !== -1 && tagEnd < idx && lastClose < pStart) {
+            return html.slice(0, pStart) + block + '\n' + html.slice(pStart);
+          }
+        }
+        return html.slice(0, idx) + block + '\n' + html.slice(idx);
+      }
+      return html + block;
+    };
+
+    let mailHtml = task.content || '';
+
+    // Bảng phân công SV (checkbox "Kèm bảng phân công" — mặc định bật).
+    // ≤ 50 dòng: chỉ chèn bảng; > 50: chèn 50 dòng đầu + "… và N SV khác" + đính kèm Excel đầy đủ.
+    if (includeAssignments) {
+      const assignRes = await pool.query(
+        `SELECT ta.student_id, s.first_name, s.last_name,
+                COALESCE(NULLIF(ta.class_code, ''), s.class_id) AS class_code
+         FROM task_assignments ta
+         LEFT JOIN students s ON s.student_id = ta.student_id
+         WHERE ta.task_id = $1
+         ORDER BY class_code, s.first_name, s.last_name, ta.student_id`,
+        [taskId]
+      );
+      if (assignRes.rows.length > 0) {
+        const rows = assignRes.rows;
+        const CAP = 50;
+        const shown = rows.slice(0, CAP);
+        const hidden = rows.length - shown.length;
+        const fullName = (r) => `${r.first_name || ''} ${r.last_name || ''}`.trim();
+        const bodyRows = shown
+          .map(r => `<tr><td>${escHtml(r.student_id)}</td><td>${escHtml(fullName(r))}</td><td>${escHtml(r.class_code || '')}</td></tr>`)
+          .join('');
+        const tableHtml = `\n<p><strong>Các sinh viên được phân công (${rows.length}):</strong></p>
+<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;font-size:13px;min-width:360px">
+<thead><tr style="background:#f0f0f0"><th align="left">MSSV</th><th align="left">Họ tên</th><th align="left">Lớp</th></tr></thead>
+<tbody>${bodyRows}</tbody>
+</table>`;
+        mailHtml = insertBeforeClosing(mailHtml, tableHtml);
+        if (hidden > 0) {
+          const note = `\n<p>… và ${hidden} sinh viên khác (xem file Excel đính kèm).</p>`;
+          mailHtml = insertBeforeClosing(mailHtml, note);
+          const data = rows.map(r => ({
+            'MSSV': r.student_id,
+            'Họ tên': fullName(r),
+            'Lớp': r.class_code || '',
+          }));
+          const ws = XLSX.utils.json_to_sheet(data);
+          ws['!cols'] = [{ wch: 14 }, { wch: 30 }, { wch: 16 }];
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, 'PhanCong');
+          const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+          mailAttachments.push({ filename: 'phan-cong-sinh-vien.xlsx', content: buf });
+        }
+      }
+    }
+
+    if (linkItems.length > 0) {
+      mailHtml += `\n<p><strong>Tài liệu tham chiếu:</strong></p><ul>${linkItems.join('')}</ul>`;
+    }
+
+    try {
+      await require('./services/mail.service').sendMail({
+        to: toList,
+        cc: ccList,
+        subject: task.title,
+        html: mailHtml,
+        attachments: mailAttachments,
+      });
+    } catch (mailErr) {
+      return res.status(502).json({ success: false, message: mailErr.message });
+    }
     const logs = [];
     for (const r of recipRes.rows) {
       const result = await pool.query(
@@ -582,8 +796,80 @@ app.post('/api/tasks/:taskId/send', async (req, res) => {
       logs.push(result.rows[0]);
     }
     await pool.query(`UPDATE tasks SET status='Đã gửi', updated_at=CURRENT_TIMESTAMP WHERE id=$1`, [taskId]);
-    res.json({ success: true, data: logs });
+    res.json({
+      success: true,
+      data: logs,
+      attachments: { sent: mailAttachments.length, links: linkItems.length, skipped: skippedFiles },
+    });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+// === JOB NHẮC HẠN TỰ ĐỘNG (Cc không nhận nhắc — chỉ gửi To) ===
+// Chỉ nhắc task đang 'Đã gửi' và CHỈ 1 LẦN cho mỗi task, trước deadline.
+// Quá deadline → closeExpiredTasks() chuyển 'Kết thúc' nên không còn nhắc.
+// Endpoint chạy tay để test: POST /api/reminders/run.
+async function runReminders() {
+  const { sendMail, reminderHtml } = require('./services/mail.service');
+  const out = { reminded: [], skipped: 0, errors: [] };
+  await closeExpiredTasks(); // task quá hạn đã thành Kết thúc → không nhắc
+  const tasksRes = await pool.query(
+    `SELECT * FROM tasks WHERE status = 'Đã gửi' AND deadline IS NOT NULL`
+  );
+  const now = Date.now();
+  for (const task of tasksRes.rows) {
+    try {
+      const recipRes = await pool.query(
+        `SELECT * FROM task_recipients WHERE task_id = $1 AND (kind IS NULL OR kind != 'cc')`,
+        [task.id]
+      );
+      if (recipRes.rows.length === 0) { out.skipped += 1; continue; }
+      // Đã nhắc lần nào chưa? Có rồi thì thôi (mỗi task chỉ 1 mail nhắc).
+      const sent = await pool.query(
+        `SELECT 1 FROM email_reminders WHERE task_id = $1 AND send_type = 'Nhắc tự động' LIMIT 1`,
+        [task.id]
+      );
+      if ((sent.rowCount ?? 0) > 0) { out.skipped += 1; continue; }
+      const msLeft = new Date(task.deadline).getTime() - now;
+      const remindMs = (Number(task.remind_before_days) || 0) * 24 * 3600 * 1000;
+      // Chỉ nhắc khi còn thời gian (chưa quá hạn) và đã vào cửa sổ "nhắc trước N ngày".
+      if (remindMs <= 0 || msLeft <= 0 || msLeft > remindMs) { out.skipped += 1; continue; }
+      const subject = `[Nhắc hạn] ${task.title}`;
+      await sendMail({
+        to: recipRes.rows.map(r => r.recipient_email),
+        subject,
+        html: reminderHtml(task),
+      });
+      for (const r of recipRes.rows) {
+        await pool.query(
+          `INSERT INTO email_reminders (task_id, recipient_email, recipient_type, subject, body_content, send_type, kind, scheduled_at, sent_at, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'Đã gửi')`,
+          [task.id, r.recipient_email, r.recipient_group || 'GVCN', subject, task.content || '', 'Nhắc tự động', r.kind || 'to']
+        );
+      }
+      out.reminded.push(task.id);
+    } catch (e) {
+      out.errors.push({ taskId: task.id, message: e.message });
+    }
+  }
+  return out;
+}
+
+app.post('/api/reminders/run', async (req, res) => {
+  try {
+    res.json({ success: true, data: await runReminders() });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
+const cron = require('node-cron');
+cron.schedule(process.env.REMIND_CRON || '*/30 * * * *', async () => {
+  try {
+    const out = await runReminders();
+    if (out.reminded.length || out.errors.length) {
+      console.log('[reminders]', JSON.stringify(out));
+    }
+  } catch (err) {
+    console.error('[reminders] lỗi job:', err.message);
+  }
 });
 
 // === PHÂN CÔNG SINH VIÊN (tái dùng bảng task_assignments) ===
@@ -659,10 +945,29 @@ app.delete('/api/participants/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 });
 
+// === CÔNG VIỆC ĐƯỢC PHÂN CÔNG CỦA 1 SINH VIÊN (panel Hồ sơ SV) ===
+// Trả mọi task SV được phân công (không lọc trạng thái) để xem lịch sử tham gia.
+app.get('/api/students/:id/assignments', async (req, res) => {
+  try {
+    await closeExpiredTasks();
+    const result = await pool.query(
+      `SELECT ta.id, ta.task_id, ta.status AS assignment_status, ta.note, ta.class_code,
+              t.title, t.deadline, t.status AS task_status, t.semester
+       FROM task_assignments ta
+       JOIN tasks t ON t.id = ta.task_id
+       WHERE ta.student_id = $1
+       ORDER BY t.deadline DESC NULLS LAST, t.id DESC`,
+      [req.params.id]
+    );
+    res.json({ success: true, data: { total: result.rows.length, items: result.rows } });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+});
+
 // === ĐIỂM DANH 1 SINH VIÊN (panel Hồ sơ SV): chỉ task đã Kết thúc ===
 // Mỗi bản ghi task_assignments = 1 đơn vị điểm danh. Có mặt = 'Đã tham gia'.
 app.get('/api/students/:id/attendance', async (req, res) => {
   try {
+    await closeExpiredTasks(); // task đã gửi mà quá deadline → Kết thúc, hiện trong điểm danh
     const result = await pool.query(
       `SELECT ta.id, ta.task_id, ta.status AS assignment_status, ta.note,
               t.title, t.deadline, t.status AS task_status, t.semester
@@ -703,46 +1008,88 @@ app.get('/api/eoffice/documents/:id', async (req, res) => {
   }
 });
 
-// Tạo công việc từ 1 văn bản eOffice + tự tải file đính kèm về local
+// Tải các file đính kèm CHƯA CÓ của 1 văn bản eOffice về task.
+// Bấm lại "Tạo công việc" trên văn bản đã tạo = đồng bộ file thiếu (file đã có thì bỏ qua).
+async function syncEofficeAttachments(taskId, doc, req) {
+  const out = { added: 0, existing: 0, skipped: [] };
+  const current = await pool.query('SELECT file_name, file_hash FROM task_attachments WHERE task_id = $1', [taskId]);
+  const hadNames = new Set(current.rows.map(r => r.file_name));
+  const hadHashes = new Set(current.rows.map(r => r.file_hash).filter(Boolean));
+  for (const att of doc.attachments || []) {
+    if (hadNames.has(att.fileName)) { out.existing += 1; continue; }
+    if (!att.available) {
+      out.skipped.push({ fileName: att.fileName, reason: 'File gốc không còn trên eOffice' });
+      continue;
+    }
+    let buffer, contentType;
+    try {
+      const dl = await eoffice.downloadAttachment(doc.id, att.id);
+      buffer = dl.buffer;
+      contentType = dl.contentType;
+    } catch (e) {
+      console.error('[eoffice] tải đính kèm lỗi:', att.fileName, e.message);
+      out.skipped.push({ fileName: att.fileName, reason: 'Tải file lỗi — bấm "Tạo công việc" lại để thử lại' });
+      continue;
+    }
+    let fileUrl = null;
+    let wroteNew = false;
+    try {
+      const hash = sha256(buffer);
+      // Cùng nội dung đã có trong task (kể cả tên file khác) → không thêm dòng trùng
+      if (hadHashes.has(hash)) {
+        out.existing += 1;
+        hadNames.add(att.fileName);
+        continue;
+      }
+      fileUrl = await findByHash(hash);
+      if (!fileUrl) {
+        const safeName = `${Date.now()}-${att.fileName}`;
+        fs.writeFileSync(path.join(uploadDir, safeName), buffer);
+        fileUrl = `${req.protocol}://${req.get('host')}/uploads/${encodeURIComponent(safeName)}`;
+        wroteNew = true;
+      }
+      await pool.query(
+        'INSERT INTO task_attachments (task_id, file_name, file_url, file_size, file_type, file_hash) VALUES ($1, $2, $3, $4, $5, $6)',
+        [taskId, att.fileName, fileUrl, String(att.sizeBytes ?? buffer.length), safeFileType(contentType, att.fileName), hash]
+      );
+      out.added += 1;
+      hadNames.add(att.fileName);
+      hadHashes.add(hash);
+    } catch (e) {
+      console.error('[eoffice] lưu đính kèm lỗi:', att.fileName, e.message);
+      // Chỉ xoá file vừa ghi mới (file tái dùng theo hash có thể còn task khác trỏ tới)
+      if (wroteNew && fileUrl) {
+        try { fs.unlinkSync(path.join(uploadDir, storedNameOf(fileUrl))); } catch { /* bỏ qua */ }
+      }
+      out.skipped.push({ fileName: att.fileName, reason: 'Lưu file lỗi (xem log server)' });
+    }
+  }
+  return out;
+}
+
+// Tạo công việc từ 1 văn bản eOffice + tải file đính kèm về local.
+// Nếu văn bản đã tạo công việc rồi thì KHÔNG tạo mới, chỉ đồng bộ file còn thiếu.
 app.post('/api/eoffice/documents/:id/create-task', async (req, res) => {
   try {
     const doc = await eoffice.getDocumentDetail(req.params.id);
-    const existing = await pool.query('SELECT id FROM tasks WHERE eoffice_id = $1', [doc.id]);
+    const existing = await pool.query('SELECT * FROM tasks WHERE eoffice_id = $1', [doc.id]);
+    let task;
+    let existed = false;
     if (existing.rows.length > 0) {
-      return res.json({ success: true, existed: true, data: { id: existing.rows[0].id } });
+      task = existing.rows[0];
+      existed = true;
+    } else {
+      const refNo = doc.outboundNumber || doc.documentNumber || '';
+      const title = (doc.summaryText || 'Văn bản eOffice').slice(0, 255);
+      const taskRes = await pool.query(
+        `INSERT INTO tasks (title, content, priority, status, source, task_type, ref_doc_number, ref_issue_date, eoffice_id)
+         VALUES ($1, $2, 'Bình thường', 'Nháp', 'E-Office', 'ThongBaoDon', $3, $4, $5) RETURNING *`,
+        [title, doc.summaryText || '', refNo || null, doc.createdAt ? new Date(doc.createdAt) : null, doc.id]
+      );
+      task = taskRes.rows[0];
     }
-    const refNo = doc.outboundNumber || doc.documentNumber || '';
-    const title = (doc.summaryText || 'Văn bản eOffice').slice(0, 255);
-    const taskRes = await pool.query(
-      `INSERT INTO tasks (title, content, priority, status, source, task_type, ref_doc_number, ref_issue_date, eoffice_id)
-       VALUES ($1, $2, 'Bình thường', 'Mới tạo', 'E-Office', 'ThongBaoDon', $3, $4, $5) RETURNING *`,
-      [title, doc.summaryText || '', refNo || null, doc.createdAt ? new Date(doc.createdAt) : null, doc.id]
-    );
-    const task = taskRes.rows[0];
-
-    // Tải file đính kèm còn tải được về local (cùng cơ chế upload tay).
-    // Trùng nội dung với file đã có thì tái dùng, không lưu bản mới.
-    let added = 0;
-    const skipped = [];
-    for (const att of doc.attachments || []) {
-      if (!att.available) { skipped.push({ fileName: att.fileName, reason: 'File gốc không còn' }); continue; }
-      try {
-        const { buffer, contentType } = await eoffice.downloadAttachment(doc.id, att.id);
-        const hash = sha256(buffer);
-        let fileUrl = await findByHash(hash);
-        if (!fileUrl) {
-          const safeName = `${Date.now()}-${att.fileName}`;
-          fs.writeFileSync(path.join(uploadDir, safeName), buffer);
-          fileUrl = `${req.protocol}://${req.get('host')}/uploads/${encodeURIComponent(safeName)}`;
-        }
-        await pool.query(
-          'INSERT INTO task_attachments (task_id, file_name, file_url, file_size, file_type, file_hash) VALUES ($1, $2, $3, $4, $5, $6)',
-          [task.id, att.fileName, fileUrl, String(att.sizeBytes ?? buffer.length), contentType || att.extension || 'file', hash]
-        );
-        added += 1;
-      } catch (e) { skipped.push({ fileName: att.fileName, reason: 'Tải thất bại, sync sau thử lại' }); }
-    }
-    res.json({ success: true, existed: false, data: task, attachments: { added, skipped } });
+    const attachments = await syncEofficeAttachments(task.id, doc, req);
+    res.json({ success: true, existed, data: task, attachments });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, message: err.message || 'Không tạo được công việc từ eOffice' });
   }
@@ -903,6 +1250,7 @@ app.get('/api/reports/tasks', async (req, res) => {
   const group = REPORT_GROUPS.includes(String(req.query.group)) ? req.query.group : 'month';
   const { from, to } = req.query;
   try {
+    await closeExpiredTasks();
     const conds = ['deadline IS NOT NULL'];
     const params = [];
     if (from) { params.push(from); conds.push(`deadline >= $${params.length}`); }
@@ -911,8 +1259,7 @@ app.get('/api/reports/tasks', async (req, res) => {
       `SELECT to_char(date_trunc('${group}', deadline), 'YYYY-MM-DD') AS period,
               COUNT(*) AS total,
               COUNT(*) FILTER (WHERE status = 'Kết thúc') AS completed,
-              COUNT(*) FILTER (WHERE status != 'Kết thúc' AND deadline < CURRENT_TIMESTAMP) AS overdue,
-              COUNT(*) FILTER (WHERE status != 'Kết thúc' AND deadline >= CURRENT_TIMESTAMP) AS processing
+              COUNT(*) FILTER (WHERE status = 'Đã gửi') AS processing
        FROM tasks
        WHERE ${conds.join(' AND ')}
        GROUP BY 1 ORDER BY 1`,
@@ -1017,6 +1364,7 @@ app.get('/api/reports/performance', async (req, res) => {
   const to = req.query.to || null;
   const semester = req.query.semester || null;
   try {
+    await closeExpiredTasks();
     const conds = ['t.deadline IS NOT NULL'];
     const params = [];
     if (from) { params.push(from); conds.push(`t.deadline >= $${params.length}`); }

@@ -1,23 +1,142 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import { Extension } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import { Button } from 'antd';
 import {
   BoldOutlined, ItalicOutlined, UnderlineOutlined,
   OrderedListOutlined, UnorderedListOutlined, LinkOutlined,
 } from '@ant-design/icons';
 
+export interface AssignmentPreviewRow {
+  StudentID: string;
+  FirstName: string;
+  LastName: string;
+  ClassStudentID: string;
+}
+
 interface EmailEditorProps {
   value?: string;
   onChange?: (html: string) => void;
+  /** SV được phân công — hiện bảng xem trước ngay trước lời kết (không lưu vào nội dung) */
+  assignmentRows?: AssignmentPreviewRow[];
 }
+
+// Mốc lời kết, ưu tiên giống backend (server.js insertBeforeClosing)
+const CLOSING_MARKERS = ['Kính mong', 'Kính nhờ', 'Trân trọng cảm ơn', 'Trân trọng.'];
+const PREVIEW_CAP = 50;
+// Plugin state giữ danh sách SV hiện tại (tránh đọc React ref trong lúc render)
+const assignmentPreviewKey = new PluginKey<AssignmentPreviewRow[]>('assignmentPreview');
+
+// Tìm vị trí đoạn kết: ưu tiên "Kính mong" → "Kính nhờ" → "Trân trọng cảm ơn" → "Trân trọng."
+const findClosingPos = (doc: PMNode): number | null => {
+  const matches: Array<{ pos: number; priority: number }> = [];
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return;
+    const text = node.textContent;
+    for (let p = 0; p < CLOSING_MARKERS.length; p++) {
+      if (text.includes(CLOSING_MARKERS[p])) {
+        matches.push({ pos, priority: p });
+        break;
+      }
+    }
+  });
+  if (matches.length === 0) return null;
+  // Ưu tiên mốc thứ tự backend; cùng mốc thì lấy lần xuất hiện cuối
+  matches.sort((a, b) => a.priority - b.priority || b.pos - a.pos);
+  return matches[0].pos;
+};
+
+// Dựng DOM bảng preview (thuần DOM, không phải nội dung ProseMirror)
+const buildPreviewDom = (rows: AssignmentPreviewRow[]): HTMLElement => {
+  const wrap = document.createElement('div');
+  wrap.className = 'tc-assign-preview';
+  wrap.contentEditable = 'false';
+
+  const title = document.createElement('div');
+  title.className = 'tc-assign-preview-title';
+  title.textContent = `Các sinh viên được phân công (${rows.length}) — xem trước`;
+  wrap.appendChild(title);
+
+  const scroll = document.createElement('div');
+  scroll.className = 'tc-assign-preview-scroll';
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  ['MSSV', 'Họ tên', 'Lớp'].forEach((label) => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  rows.slice(0, PREVIEW_CAP).forEach((r) => {
+    const tr = document.createElement('tr');
+    [r.StudentID, `${r.FirstName} ${r.LastName}`.trim() || '—', r.ClassStudentID || '—'].forEach((val) => {
+      const td = document.createElement('td');
+      td.textContent = val;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  scroll.appendChild(table);
+  wrap.appendChild(scroll);
+
+  if (rows.length > PREVIEW_CAP) {
+    const more = document.createElement('div');
+    more.className = 'tc-assign-preview-note';
+    more.textContent = `… và ${rows.length - PREVIEW_CAP} sinh viên khác (file Excel đính kèm khi gửi).`;
+    wrap.appendChild(more);
+  }
+  const hint = document.createElement('div');
+  hint.className = 'tc-assign-preview-note';
+  hint.textContent = 'Bảng xem trước — không lưu vào nội dung email.';
+  wrap.appendChild(hint);
+
+  return wrap;
+};
 
 // Rich text editor cho Body email (Gói 3): đậm/nghiêng/gạch chân,
 // list, link. Không chèn ảnh (giữ scope).
 // Dùng trong AntD Form.Item qua props value/onChange chuẩn.
-const EmailEditor: React.FC<EmailEditorProps> = ({ value, onChange }) => {
+const EmailEditor: React.FC<EmailEditorProps> = ({ value, onChange, assignmentRows }) => {
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; });
+
+  const previewExt = useMemo(() => Extension.create({
+    name: 'assignmentPreview',
+    addProseMirrorPlugins() {
+      return [
+        new Plugin<AssignmentPreviewRow[]>({
+          key: assignmentPreviewKey,
+          state: {
+            init: () => [],
+            apply(tr, prev) {
+              const next = tr.getMeta(assignmentPreviewKey);
+              return Array.isArray(next) ? next : prev;
+            },
+          },
+          props: {
+            decorations(state) {
+              const rows = assignmentPreviewKey.getState(state) || [];
+              if (rows.length === 0) return null;
+              const pos = findClosingPos(state.doc);
+              const at = pos == null ? state.doc.content.size : pos;
+              return DecorationSet.create(state.doc, [
+                Decoration.widget(at, () => buildPreviewDom(rows), { side: pos == null ? 1 : -1 }),
+              ]);
+            },
+          },
+        }),
+      ];
+    },
+  }), []);
 
   const editor = useEditor({
     // TipTap v3 đã gồm sẵn underline + link trong StarterKit —
@@ -26,6 +145,7 @@ const EmailEditor: React.FC<EmailEditorProps> = ({ value, onChange }) => {
       StarterKit.configure({
         link: { openOnClick: false },
       }),
+      previewExt,
     ],
     content: value || '',
     editorProps: { attributes: { class: 'tc-tiptap' } },
@@ -39,6 +159,17 @@ const EmailEditor: React.FC<EmailEditorProps> = ({ value, onChange }) => {
       editor.commands.setContent(value || '', { emitUpdate: false });
     }
   }, [editor, value]);
+
+  // Danh sách SV thay đổi → đẩy vào plugin state để vẽ lại widget
+  // (không đổi doc, không vào undo history, không kích hoạt onUpdate)
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.view.dispatch(
+      editor.state.tr
+        .setMeta(assignmentPreviewKey, assignmentRows || [])
+        .setMeta('addToHistory', false)
+    );
+  }, [editor, assignmentRows]);
 
   const setLink = () => {
     if (!editor) return;

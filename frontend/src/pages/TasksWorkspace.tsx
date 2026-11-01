@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
-import { Tag, Modal, message } from 'antd';
+import { Tag, Modal, Button, message } from 'antd';
 import { EditOutlined, FileAddOutlined } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Tasks from './Tasks';
 import TaskCompose from './TaskCompose';
-import type { TaskComposeHandle } from './TaskCompose';
+import type { TaskComposeHandle, AutoSaveResult } from './TaskCompose';
 import { getTask } from '../services/api';
 import type { Task } from '../types';
 
@@ -29,6 +29,13 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
   const [tabs, setTabs] = useState<ComposeTab[]>([]);
   const [activeKey, setActiveKey] = useState<string>('list');
   const [listRefresh, setListRefresh] = useState(0);
+  // Modal "Lưu và Đóng" khi bấm × trên tab đang có thay đổi
+  const [closeTab, setCloseTab] = useState<ComposeTab | null>(null);
+  const [closeSaving, setCloseSaving] = useState(false);
+  // Khai báo sớm: effect deep-link bên dưới đọc location.search ngay khi render
+  // (khai báo sau sẽ rơi vào TDZ và crash app).
+  const location = useLocation();
+  const navigate = useNavigate();
 
   // Quay lại mục Công việc → tải lại bảng (bỏ qua lần mount đầu)
   const firstActive = useRef(true);
@@ -98,6 +105,59 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
     });
   };
 
+  // Lưu nháp 1 tab (autoSave tự bỏ qua nếu không có thay đổi).
+  // Tab 'new' lưu xong đổi sang 'edit-<id>' để lần sau không tạo trùng công việc.
+  const saveTab = async (tab: ComposeTab): Promise<{ result: AutoSaveResult; finalKey: string } | null> => {
+    const h = tabRefs.current.get(tab.key);
+    if (!h) return null;
+    let result: AutoSaveResult;
+    try { result = await h.autoSave(); } catch { return null; }
+    let finalKey = tab.key;
+    if (result.saved && result.taskId) {
+      setListRefresh(v => v + 1);
+      if (tab.kind === 'new') {
+        const taskId = result.taskId;
+        finalKey = `edit-${taskId}`;
+        setTabs(prevTabs => {
+          const without = prevTabs.filter(x => x.key !== tab.key && x.key !== finalKey);
+          return [...without, { key: finalKey, kind: 'edit', taskId, title: result.title, dirty: false }];
+        });
+        setActiveKey(cur => (cur === tab.key ? finalKey : cur));
+      }
+    }
+    return { result, finalKey };
+  };
+
+  // Nút Danh sách: tự Lưu nháp tab đang mở nếu có thay đổi, rồi mới chuyển về bảng
+  const goToList = async () => {
+    const key = activeKey;
+    if (key !== 'list') {
+      const tab = tabsRef.current.find(t => t.key === key);
+      if (tab) {
+        const outcome = await saveTab(tab);
+        if (outcome?.result.saved) message.success(`Đã lưu nháp '${outcome.result.title}'`);
+        else if (outcome?.result.skipped) message.warning(`Chưa lưu được '${outcome.result.title}': ${outcome.result.skipped}`);
+      }
+    }
+    setActiveKey('list');
+  };
+
+  // Deep-link ?taskId=... (chuông thông báo / Lịch / Hồ sơ SV): về tab Danh sách để
+  // Tasks.tsx tự mở Drawer chi tiết khi bảng đã tải. Tab soạn đang dở được Lưu nháp
+  // trước (đúng luật nút Danh sách) và vẫn giữ trên thanh tab, không đóng.
+  const deepLinkHandled = useRef('');
+  useEffect(() => {
+    const taskIdParam = new URLSearchParams(location.search).get('taskId');
+    if (!taskIdParam) { if (deepLinkHandled.current) deepLinkHandled.current = ''; return; }
+    if (!active || activeKey === 'list' || deepLinkHandled.current === taskIdParam) return;
+    deepLinkHandled.current = taskIdParam;
+    Promise.resolve()
+      .then(() => goToList())
+      .catch(() => undefined);
+    // goToList tái tạo mỗi render — gọi qua Promise để tránh vòng deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, activeKey, location.search]);
+
   const openNew = useCallback(() => {
     if (tabsRef.current.length >= MAX_TABS) { message.warning(`Đang mở tối đa ${MAX_TABS} tab soạn — đóng bớt trước khi mở thêm`); return; }
     const key = `new-${Date.now()}`;
@@ -115,8 +175,6 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
 
   // Mọi đường mở soạn (eOffice, deep-link) đều dồn về tab workspace để giữ nháp.
   // Gửi kèm location.state {openNew} hoặc {openEditTaskId}, đọc 1 lần rồi xóa.
-  const location = useLocation();
-  const navigate = useNavigate();
   const consumedState = useRef<unknown>(null);
   useEffect(() => {
     if (!active) return;
@@ -142,17 +200,25 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
   };
 
   const requestClose = (key: string) => {
-    const tab = tabs.find(t => t.key === key);
+    const tab = tabsRef.current.find(t => t.key === key);
     if (!tab) return;
     if (!tab.dirty) { removeTab(key); return; }
-    Modal.confirm({
-      title: 'Đóng tab này?',
-      content: 'Nội dung đang soạn sẽ bị mất.',
-      okText: 'Đóng',
-      cancelText: 'Ở lại',
-      okButtonProps: { danger: true },
-      onOk: () => removeTab(key),
-    });
+    setCloseTab(tab);
+  };
+
+  // Lưu nháp rồi đóng tab; lỗi thì giữ modal để người dùng thử lại
+  const handleSaveAndClose = async () => {
+    if (!closeTab) return;
+    setCloseSaving(true);
+    const outcome = await saveTab(closeTab);
+    setCloseSaving(false);
+    if (!outcome) { message.error('Không lưu được — tab vẫn mở'); return; }
+    if (!outcome.result.saved && outcome.result.skipped) {
+      message.warning(`Chưa lưu được '${outcome.result.title}': ${outcome.result.skipped}`);
+      return;
+    }
+    removeTab(outcome.finalKey);
+    setCloseTab(null);
   };
 
   // Lưu/Gửi xong: đóng tab, về danh sách, tải lại bảng
@@ -169,7 +235,7 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
         <h2 style={{ margin: 0, marginRight: 'auto' }}>Quản lý Công việc & Sự kiện</h2>
         <Tag
-          onClick={() => setActiveKey('list')}
+          onClick={goToList}
           color={activeKey === 'list' ? 'green' : 'default'}
           style={{ cursor: 'pointer', padding: '5px 12px', fontSize: 13, marginRight: 0 }}
         >
@@ -202,10 +268,24 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
             onTitleChange={(title) => patchTab(t.key, { title })}
             onDirtyChange={(dirty) => patchTab(t.key, { dirty })}
             onDone={() => handleDone(t.key)}
-            onBack={() => setActiveKey('list')}
+            onBack={goToList}
           />
         </div>
       ))}
+
+      <Modal
+        open={!!closeTab}
+        title="Lưu thay đổi trước khi đóng?"
+        onCancel={() => { if (!closeSaving) setCloseTab(null); }}
+        maskClosable={!closeSaving}
+        closable={!closeSaving}
+        footer={[
+          <Button key="stay" disabled={closeSaving} onClick={() => setCloseTab(null)}>Ở lại</Button>,
+          <Button key="save" type="primary" loading={closeSaving} onClick={handleSaveAndClose}>Lưu và Đóng</Button>,
+        ]}
+      >
+        Nội dung đã thay đổi sẽ được lưu nháp trước khi đóng tab.
+      </Modal>
     </div>
   );
 };

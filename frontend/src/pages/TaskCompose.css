@@ -89,6 +89,52 @@
   color: #237804;
 }
 
+/* Bảng phân công xem trước (widget decoration trong editor) */
+.tc-assign-preview {
+  margin: 10px 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed #b7eb8f;
+  border-radius: 6px;
+  background: #f6ffed;
+  font-size: 13px;
+  user-select: none;
+}
+
+.tc-assign-preview-title {
+  font-weight: 600;
+  color: #237804;
+  margin-bottom: 6px;
+}
+
+.tc-assign-preview-scroll {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.tc-assign-preview table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tc-assign-preview th,
+.tc-assign-preview td {
+  border: 1px solid #d9d9d9;
+  padding: 4px 6px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.tc-assign-preview th {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.tc-assign-preview-note {
+  margin-top: 4px;
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
 /* Khung kéo-thả gọn trong cột phải */
 .tc-side .ant-upload-drag {
   padding: 12px 8px;
