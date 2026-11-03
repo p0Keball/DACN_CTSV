@@ -139,16 +139,34 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
     else message.error('Lỗi khi xóa');
   };
 
-  // Kết thúc / Mở lại. Mở lại task đã quá deadline sẽ bị auto-close lại ngay → chặn trước.
+  // Kết thúc / Mở lại. Mở lại task CHƯA TỪNG GỬI (Nháp) thì quay về 'Nháp', không phải
+  // 'Đã gửi' (backend quyết định theo trạng thái trước, tránh "mở lại thành Đã gửi dù
+  // chưa từng gửi"). Mở lại task 'Đã gửi' đã quá deadline sẽ bị auto-close lại → chặn trước.
   const handleToggleStatus = async (task: Task) => {
-    const next = task.status === 'Kết thúc' ? 'Đã gửi' : 'Kết thúc';
-    if (next === 'Đã gửi' && task.deadline && dayjs(task.deadline).isBefore(dayjs())) {
-      message.warning('Deadline đã qua — hãy đổi deadline trước khi mở lại, nếu không công việc sẽ tự Kết thúc lại.');
-      return;
+    let next: string;
+    if (task.status === 'Kết thúc') {
+      try {
+        const histRes = await getTaskHistory(task.id);
+        const hasSent = histRes.success && Array.isArray(histRes.data) && histRes.data.length > 0;
+        next = hasSent ? 'Đã gửi' : 'Nháp';
+      } catch {
+        next = 'Đã gửi';
+      }
+      if (next === 'Đã gửi' && task.deadline && dayjs(task.deadline).isBefore(dayjs())) {
+        message.warning('Deadline đã qua — hãy đổi deadline trước khi mở lại, nếu không công việc sẽ tự Kết thúc lại.');
+        return;
+      }
+    } else {
+      next = 'Kết thúc';
     }
+
     const res = await setTaskStatus(task.id, next);
-    if (res.success) { message.success(next === 'Kết thúc' ? 'Đã Kết thúc công việc' : 'Đã mở lại công việc'); loadTasks(); }
-    else message.error('Không đổi được trạng thái');
+    if (res.success) {
+      message.success(next === 'Kết thúc' ? 'Đã Kết thúc công việc' : 'Đã mở lại công việc (trạng thái: ' + next + ')');
+      loadTasks();
+    } else {
+      message.error('Không đổi được trạng thái');
+    }
   };
 
   const columns = [
@@ -174,7 +192,7 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
               title="Mở lại công việc"
               onClick={(e) => { e.stopPropagation(); handleToggleStatus(record); }}
             />
-          ) : (
+          ) : record.status === 'Đã gửi' ? (
             <Popconfirm title="Đánh dấu công việc đã Kết thúc?" onConfirm={() => handleToggleStatus(record)}>
               <Button
                 type="link"
@@ -183,6 +201,14 @@ const Tasks: React.FC<TasksListProps> = ({ onNew, onEdit, refreshToken }) => {
                 onClick={(e) => e.stopPropagation()}
               />
             </Popconfirm>
+          ) : (
+            <Button
+              type="link"
+              disabled
+              icon={<CheckCircleOutlined />}
+              title="Công việc Nháp chưa gửi — hãy Gửi trước khi Kết thúc"
+              onClick={(e) => e.stopPropagation()}
+            />
           )}
           <Button type="link" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); onEdit(record); }} />
           <Popconfirm title="Xóa công việc này?" onConfirm={() => handleDelete(record.id)}>

@@ -155,26 +155,58 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
 
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [existingFiles, setExistingFiles] = useState<Attachment[]>([]);
+  const existingFilesRef = useRef<Attachment[]>([]);
+  // Task mới đã tạo nhưng bước sau lỗi (upload file / SMTP / đồng bộ người nhận)
+  // hoặc đã Lưu nháp giữ tab → các lần lưu/gửi lại cập nhật chính task đó, không gọi addTask lần 2.
+  const createdTaskIdRef = useRef<number | null>(null);
   // AI soạn từ file (Phase 1): chỉ task đã lưu mới có file trên server
   const [aiOpen, setAiOpen] = useState(false);
   const [aiSelected, setAiSelected] = useState<number[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiSaving, setAiSaving] = useState(false);
 
-  const openAiModal = () => {
-    if (!editingId) { message.info('Lưu nháp trước, rồi mới dùng AI soạn từ file'); return; }
-    if (existingFiles.length === 0) { message.warning('Công việc chưa có file nào trên server'); return; }
-    setAiSelected(existingFiles.map(f => f.id));
+  const mergeAttachments = (prev: Attachment[], added: Attachment[]): Attachment[] => {
+    const seen = new Set(prev.map(a => a.id));
+    const next = [...prev];
+    for (const a of added) {
+      if (a && !seen.has(a.id)) {
+        seen.add(a.id);
+        next.push(a);
+      }
+    }
+    return next;
+  };
+
+  const openAiModal = async () => {
+    // Task mới chưa từng lưu hoặc vừa chọn thêm file / dán link chưa lên server:
+    // tự Lưu nháp (giữ nguyên tab, không đóng) rồi mở AI — khỏi "Lưu nháp → tìm lại task → mở lại".
+    if (busyRef.current || saving) { message.warning('Đang lưu, thử lại trong giây lát'); return; }
+    if (loading) { message.warning('Đang tải công việc'); return; }
+    const hasPendingLink = String(form.getFieldValue('drive_link') || '').trim() !== '';
+    if ((!editingId && !createdTaskIdRef.current) || fileList.length > 0 || hasPendingLink) {
+      setAiSaving(true);
+      try {
+        const ok = await handleSaveDraft();
+        if (!ok) return;
+      } finally { setAiSaving(false); }
+    }
+    const currentFiles = existingFilesRef.current;
+    if (currentFiles.length === 0) { message.warning('Công việc chưa có file nào trên server'); return; }
+    setAiSelected(currentFiles.map(f => f.id));
     setAiOpen(true);
   };
 
   const runAiDraft = async () => {
-    if (!editingId || aiSelected.length === 0) { message.warning('Chọn ít nhất 1 file'); return; }
+    const aiTaskId = editingId || createdTaskIdRef.current;
+    if (!aiTaskId || aiSelected.length === 0) { message.warning('Chọn ít nhất 1 file'); return; }
     setAiLoading(true);
     try {
-      const res = await draftEmailFromFiles(editingId, aiSelected);
+      const res = await draftEmailFromFiles(aiTaskId, aiSelected);
       if (!res.success) throw new Error(res.message || 'AI soạn thất bại');
       const apply = () => {
         form.setFieldsValue({ title: res.data.subject, content: res.data.body });
+        if (res.data.subject) onTitleRef.current?.(res.data.subject);
+        onDirtyRef.current?.(true);
         setAiOpen(false);
         message.success('AI đã soạn xong — bạn sửa lại rồi gửi');
       };
@@ -294,7 +326,10 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
           setRecipDrafts(recipRes.data);
           initRecipsRef.current = recipRes.data.map((r: { recipient_email: string }) => r.recipient_email.toLowerCase());
         }
-        if (attRes.success) setExistingFiles(attRes.data);
+        if (attRes.success) {
+          existingFilesRef.current = attRes.data;
+          setExistingFiles(attRes.data);
+        }
         if (partRes.success) {
           const ids = partRes.data.map((p: { student_id: string }) => p.student_id);
           setSelectedStudents(ids);
@@ -345,7 +380,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
   const computeConfirmNeeded = () => {
     const titleTxt = String(form.getFieldValue('title') || '').trim();
     const bodyTxt = stripHtmlText(String(form.getFieldValue('content') || ''));
-    if (!editingId) {
+    if (!editingId && !createdTaskIdRef.current) {
       return titleTxt !== ''
         || bodyTxt !== ''
         || fileList.length > 0
@@ -367,7 +402,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     const titleTxt = String(form.getFieldValue('title') || '').trim();
     const bodyTxt = stripHtmlText(String(form.getFieldValue('content') || ''));
     let needed: boolean;
-    if (!editingId) {
+    if (!editingId && !createdTaskIdRef.current) {
       needed = titleTxt !== ''
         || bodyTxt !== ''
         || fileList.length > 0
@@ -382,7 +417,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
         || fileList.length > 0;
     }
     onDirtyRef.current?.(needed);
-  }, [editingId, recipDrafts, fileList, selectedStudents, form, ccList]);
+  }, [editingId, recipDrafts, fileList, selectedStudents, form, recipsDifferFromAutoCc]);
 
   const handleFormChange = (changed: Record<string, unknown>) => {
     onDirtyRef.current?.(computeConfirmNeeded());
@@ -584,14 +619,11 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     const res = await deleteAttachment(id);
     if (res.success) {
       message.success('Đã xóa file');
-      setExistingFiles(prev => prev.filter(f => f.id !== id));
+      existingFilesRef.current = existingFilesRef.current.filter(f => f.id !== id);
+      setExistingFiles(existingFilesRef.current);
       onDirtyRef.current?.(true); // xóa file là thay đổi (dù đã lưu ngay)
     } else message.error('Lỗi khi xóa file');
   };
-
-  // Task mới đã tạo nhưng bước sau lỗi (upload file / SMTP / đồng bộ người nhận)
-  // → các lần lưu/gửi lại phải cập nhật chính task đó, không gọi addTask lần 2.
-  const createdTaskIdRef = useRef<number | null>(null);
 
   // persistTask: lưu task + recipients + attachments, trả về taskId.
   // lenient (auto-save): bỏ validate nghiêm, chỉ bắt buộc Tiêu đề (DB NOT NULL);
@@ -657,11 +689,14 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     // (auto-save/retry) không chèn thêm một dòng link trùng.
     const driveLink = String(values.drive_link || '').trim();
     if (driveLink) {
-      const alreadyLinked = existingFiles.some(f => f.file_url === driveLink);
+      const alreadyLinked = existingFilesRef.current.some(f => f.file_url === driveLink);
       if (!alreadyLinked) {
         const linkRes = await addTaskAttachmentLink(taskId, driveLink);
         if (!linkRes?.success) throw new Error(linkRes?.message || 'Lưu link tài liệu thất bại');
-        if (linkRes.data) setExistingFiles(prev => [...prev, linkRes.data]);
+        if (linkRes.data) {
+          existingFilesRef.current = mergeAttachments(existingFilesRef.current, [linkRes.data]);
+          setExistingFiles(existingFilesRef.current);
+        }
       }
       form.setFieldsValue({ drive_link: '' });
     }
@@ -691,8 +726,9 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
       });
       const uploadRes = await uploadTaskFiles(taskId, formData);
       if (!uploadRes?.success) throw new Error(uploadRes?.message || 'Tải file đính kèm thất bại');
-      // File đã lên server → chuyển sang danh sách file hiện có để không upload lại
-      setExistingFiles(prev => [...prev, ...(uploadRes.data || [])]);
+      // File đã lên server → chuyển sang danh sách file hiện có (chống trùng theo id) để không upload lại
+      existingFilesRef.current = mergeAttachments(existingFilesRef.current, uploadRes.data || []);
+      setExistingFiles(existingFilesRef.current);
       setFileList([]);
     }
     return taskId;
@@ -708,14 +744,20 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
       ? loadedStatusRef.current
       : 'Nháp';
 
-  const handleSaveDraft = async () => {
-    if (busyRef.current) return;
+  const handleSaveDraft = async (): Promise<boolean> => {
+    if (busyRef.current) return false;
     busyRef.current = true;
     setSaving(true);
     try {
       // Nháp chỉ cần Tiêu đề; Học kỳ/Deadline để trống, điền sau khi Gửi
       await persistTask(draftStatus(), { lenient: true });
-      done();
+      initFormRef.current = snapForm(form.getFieldsValue());
+      initRecipsRef.current = recipDrafts.map(r => r.recipient_email.toLowerCase());
+      initSelectedRef.current = [...selectedStudents];
+      onDirtyRef.current?.(false);
+      // Tab mode: giữ nguyên tab (để tiếp tục soạn/AI); route mode (deep-link) thì về danh sách
+      if (onDone) message.success('Đã lưu nháp'); else done();
+      return true;
     } catch (e) {
       // Chỉ thiếu Tiêu đề (DB bắt buộc) → báo ngay tại ô, không hiện toast
       const err = e as { errorFields?: Array<{ name?: (string | number)[] }> };
@@ -728,6 +770,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
       } else {
         message.error(apiErrorMessage(e, 'Có lỗi khi lưu nháp!'));
       }
+      return false;
     } finally { setSaving(false); busyRef.current = false; }
   };
 
@@ -737,8 +780,11 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
     busyRef.current = true;
     setSaving(true);
     try {
+      // "Gửi lại" chỉ khi task đã từng 'Đã gửi' (task mới tạo giữa chừng trước đó
+      // vẫn là 'Nháp' → lần gửi này vẫn là lần đầu), để lịch sử gửi không sai.
+      const sendType = loadedStatusRef.current === 'Đã gửi' ? 'Gửi lại' : 'Gửi lần đầu';
       const taskId = await persistTask(draftStatus());
-      const res = await sendTaskEmail(taskId, 'Gửi lần đầu', includeAssignments);
+      const res = await sendTaskEmail(taskId, sendType, includeAssignments);
       if (!res.success) throw new Error(res.message || 'Gửi thất bại');
       const att = res.attachments as { sent?: number; links?: number; skipped?: string[] } | undefined;
       message.success(`Đã gửi email tới ${res.data.length} người nhận${att?.sent ? `, kèm ${att.sent} file` : ''}`);
@@ -991,7 +1037,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
                   style={{ marginTop: 8 }}
                   type="warning"
                   showIcon
-                  title="Chiến dịch phân công: chọn sinh viên ở khối bên dưới, theo dõi điểm danh ở trang chi tiết"
+                  title="Chiến dịch phân công: chọn sinh viên ở khối bên dưới — danh sách SV sẽ được ghi vào công việc (kèm bảng phân công khi gửi email, xem lại ở chi tiết công việc)"
                 />
               )}
             </Card>
@@ -1089,7 +1135,7 @@ const TaskCompose = forwardRef<TaskComposeHandle, TaskComposeProps>((props, ref)
               size="small"
               className="tc-card"
               title={`Tài liệu đính kèm (${existingFiles.length + fileList.length})`}
-              extra={<Button size="small" onClick={openAiModal}>✨ AI soạn từ file</Button>}
+              extra={<Button size="small" loading={aiSaving} onClick={openAiModal}>✨ AI soạn từ file</Button>}
             >
               <Form.Item name="drive_link" label="Link Google Sheets / Docs">
                 <Input prefix={<LinkOutlined style={{ color: 'rgba(0,0,0,.25)' }} />} placeholder="Dán link..." />

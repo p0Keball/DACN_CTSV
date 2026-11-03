@@ -108,10 +108,15 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
   // Lưu nháp 1 tab (autoSave tự bỏ qua nếu không có thay đổi).
   // Tab 'new' lưu xong đổi sang 'edit-<id>' để lần sau không tạo trùng công việc.
   const saveTab = async (tab: ComposeTab): Promise<{ result: AutoSaveResult; finalKey: string } | null> => {
+    // (cùng hàm cũ, chỉ bổ sung nhánh catch trên)
     const h = tabRefs.current.get(tab.key);
     if (!h) return null;
     let result: AutoSaveResult;
-    try { result = await h.autoSave(); } catch { return null; }
+    try { result = await h.autoSave(); }
+    catch {
+      // autoSave tự bắt lỗi riêng — chỉ ném khi ref không hoạt động (tab đang unmount)
+      return { result: { saved: false, title: tab.title || '', skipped: 'tab đang đóng' }, finalKey: tab.key };
+    }
     let finalKey = tab.key;
     if (result.saved && result.taskId) {
       setListRefresh(v => v + 1);
@@ -128,15 +133,26 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
     return { result, finalKey };
   };
 
-  // Nút Danh sách: tự Lưu nháp tab đang mở nếu có thay đổi, rồi mới chuyển về bảng
-  const goToList = async () => {
+  // Nút Danh sách: tự Lưu nháp tab đang mở nếu có thay đổi, rồi mới chuyển về bảng.
+  // Lưu LỖI (skipped) → GIỮ nguyên tab (giống modal Lưu và Đóng), không văng về bảng
+  // để nháp không bị bỏ ngỏ; tab không có thay đổi thì chuyển bình thường.
+  // force=true (deep-link từ chuông/Lịch/Hồ sơ): vẫn chuyển để mở được công việc,
+  // nhưng báo rõ là nháp chưa lưu xong và tab vẫn còn trên thanh tab.
+  const goToList = async (force = false) => {
     const key = activeKey;
     if (key !== 'list') {
       const tab = tabsRef.current.find(t => t.key === key);
       if (tab) {
         const outcome = await saveTab(tab);
         if (outcome?.result.saved) message.success(`Đã lưu nháp '${outcome.result.title}'`);
-        else if (outcome?.result.skipped) message.warning(`Chưa lưu được '${outcome.result.title}': ${outcome.result.skipped}`);
+        else if (outcome?.result.skipped) {
+          const warn = `Chưa lưu được '${outcome.result.title}': ${outcome.result.skipped}`;
+          if (!force) {
+            message.warning(`${warn} — giữ lại tab, chưa chuyển danh sách`);
+            return;
+          }
+          message.warning(`${warn} — vẫn chuyển danh sách để mở công việc`, 5);
+        }
       }
     }
     setActiveKey('list');
@@ -152,7 +168,7 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
     if (!active || activeKey === 'list' || deepLinkHandled.current === taskIdParam) return;
     deepLinkHandled.current = taskIdParam;
     Promise.resolve()
-      .then(() => goToList())
+      .then(() => goToList(true))
       .catch(() => undefined);
     // goToList tái tạo mỗi render — gọi qua Promise để tránh vòng deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -235,7 +251,7 @@ const TasksWorkspace: React.FC<{ active: boolean }> = ({ active }) => {
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
         <h2 style={{ margin: 0, marginRight: 'auto' }}>Quản lý Công việc & Sự kiện</h2>
         <Tag
-          onClick={goToList}
+          onClick={() => goToList()}
           color={activeKey === 'list' ? 'green' : 'default'}
           style={{ cursor: 'pointer', padding: '5px 12px', fontSize: 13, marginRight: 0 }}
         >

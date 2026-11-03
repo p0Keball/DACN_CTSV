@@ -479,6 +479,10 @@ app.put('/api/tasks/:id/status', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Trạng thái không hợp lệ' });
   }
   try {
+    const cur = await pool.query('SELECT status FROM tasks WHERE id = $1', [req.params.id]);
+    if (cur.rows.length > 0 && cur.rows[0].status === 'Nháp' && status === 'Kết thúc') {
+      return res.status(400).json({ success: false, message: 'Công việc đang ở trạng thái Nháp (chưa gửi), không thể đánh dấu Kết thúc' });
+    }
     await pool.query('UPDATE tasks SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [status, req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
@@ -690,13 +694,7 @@ app.post('/api/tasks/:taskId/send', async (req, res) => {
         skippedFiles.push(a.file_name || name || 'file');
       }
     }
-    const MAX_ATTACH = 25 * 1024 * 1024; // Gmail chặn email > 25MB
-    if (attachBytes > MAX_ATTACH) {
-      return res.status(400).json({
-        success: false,
-        message: `Tổng file đính kèm ${(attachBytes / 1024 / 1024).toFixed(1)}MB vượt giới hạn 25MB của Gmail — gỡ bớt file rồi gửi lại.`,
-      });
-    }
+    
     // Chèn bảng phân công vào TRƯỚC đoạn kết (Kính mong/Kính nhờ/Trân trọng cảm ơn)
     // để bảng không nằm sau lời kết. Không tìm thấy mốc → nối cuối như cũ.
     const insertBeforeClosing = (html, block) => {
@@ -766,6 +764,7 @@ app.post('/api/tasks/:taskId/send', async (req, res) => {
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, 'PhanCong');
           const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+          attachBytes += buf.length;
           mailAttachments.push({ filename: 'phan-cong-sinh-vien.xlsx', content: buf });
         }
       }
@@ -773,6 +772,14 @@ app.post('/api/tasks/:taskId/send', async (req, res) => {
 
     if (linkItems.length > 0) {
       mailHtml += `\n<p><strong>Tài liệu tham chiếu:</strong></p><ul>${linkItems.join('')}</ul>`;
+    }
+
+    const MAX_ATTACH = 25 * 1024 * 1024; // Gmail chặn email > 25MB (tính cả file Excel phân công)
+    if (attachBytes > MAX_ATTACH) {
+      return res.status(400).json({
+        success: false,
+        message: `Tổng file đính kèm ${(attachBytes / 1024 / 1024).toFixed(1)}MB vượt giới hạn 25MB của Gmail — gỡ bớt file rồi gửi lại.`,
+      });
     }
 
     try {

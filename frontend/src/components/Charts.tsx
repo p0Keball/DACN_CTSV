@@ -12,6 +12,7 @@ interface Task {
 
 interface MonthCount {
   name: string;
+  yearMonthKey: number;
   'Kết thúc': number;
   'Đã gửi': number;
   'Nháp': number;
@@ -42,14 +43,18 @@ const Charts: React.FC<ChartsProps> = ({ tasks = [] }) => {
       const date = new Date(task.deadline);
       const monthYear = `T${date.getMonth() + 1}/${date.getFullYear()}`;
       if (!acc[monthYear]) {
-        acc[monthYear] = { name: monthYear, 'Kết thúc': 0, 'Đã gửi': 0, 'Nháp': 0 };
+        acc[monthYear] = {
+          name: monthYear,
+          yearMonthKey: date.getFullYear() * 100 + (date.getMonth() + 1),
+          'Kết thúc': 0, 'Đã gửi': 0, 'Nháp': 0,
+        };
       }
       if (task.status === 'Kết thúc') acc[monthYear]['Kết thúc'] += 1;
       else if (task.status === 'Đã gửi') acc[monthYear]['Đã gửi'] += 1;
       else acc[monthYear]['Nháp'] += 1;
       return acc;
     }, {});
-    return Object.values(monthCounts);
+    return Object.values(monthCounts).sort((a, b) => a.yearMonthKey - b.yearMonthKey);
   }, [tasks]);
 
   return (

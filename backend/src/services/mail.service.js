@@ -39,13 +39,13 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 
 const reminderHtml = (task) => `
 <p>Kính gửi quý thầy/cô,</p>
-<p>Công việc <strong>${esc(task.title)}</strong> đến hạn lúc <strong>${task.deadline ? new Date(task.deadline).toLocaleString('vi-VN') : 'chưa rõ'}</strong>.</p>
+<p>Công việc <strong>${esc(task.title)}</strong> đến hạn lúc <strong>${task.deadline ? new Date(task.deadline).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : 'chưa rõ'}</strong>.</p>
 <p>Trợ lý CTSV đề nghị quý thầy/cô kiểm tra và phản hồi trước thời hạn trên.</p>
 <p>Trân trọng cảm ơn!</p>`;
 
 const overdueHtml = (task) => `
 <p>Kính gửi quý thầy/cô,</p>
-<p>Công việc <strong>${esc(task.title)}</strong> đã <strong style="color:red">quá hạn</strong> (hạn: ${task.deadline ? new Date(task.deadline).toLocaleString('vi-VN') : 'chưa rõ'}).</p>
+<p>Công việc <strong>${esc(task.title)}</strong> đã <strong style="color:red">quá hạn</strong> (hạn: ${task.deadline ? new Date(task.deadline).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : 'chưa rõ'}).</p>
 <p>Trợ lý CTSV đề nghị quý thầy/cô cập nhật tiến độ sớm nhất có thể.</p>
 <p>Trân trọng cảm ơn!</p>`;
 
